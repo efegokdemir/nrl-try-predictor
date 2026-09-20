@@ -2883,6 +2883,35 @@ body {
    accuracy page is currently scoped to, so R5 of 2025 does not open R5 of the
    current season. The negative margin cancels the hover padding so the bars
    stay flush with the card edge. */
+/* Column headings for the chart below. Shares the row grid so each label
+   lines up with the column it names. Not a link and not hoverable -- the
+   negative margin only matches .round-bar-row so the text aligns with the
+   row content rather than the padded hover target. */
+.round-bar-head {
+  display: grid;
+  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 3.6rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.35rem 0.35rem;
+  margin: 0 -0.35rem;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 0.2rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #999;
+}
+
+.round-bar-head-right {
+  text-align: right;
+}
+
+.round-bar-head-info {
+  color: #bbb;
+  cursor: help;
+}
+
 .round-bar-row {
   display: grid;
   grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 3.6rem;
@@ -2944,6 +2973,7 @@ body {
 }
 
 .round-bar-pl {
+  cursor: help;
   font-size: 0.7rem;
   font-weight: 600;
   text-align: right;
@@ -2964,11 +2994,6 @@ body {
   font-weight: 400;
 }
 
-.section-note {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  margin: -0.35rem 0 0.6rem;
-}
 
 /* ── Odds (inline in Draw match cards) ── */
 .team-odds {

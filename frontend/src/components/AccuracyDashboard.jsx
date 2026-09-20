@@ -4,6 +4,17 @@ import LoadingSpinner from './LoadingSpinner'
 import { fetchJson } from '../api'
 import SeasonSelect from './SeasonSelect'
 
+// How the P/L column is derived, surfaced as a tooltip. Mirrors
+// get_betting_summary(): a won pick returns the decimal odds less the $1
+// stake, a lost pick costs the $1, and a pick whose match has no score yet is
+// left out entirely rather than counted as zero.
+const PL_EXPLAINER =
+  "Profit or loss per $1 staked, simulating a flat $1 bet on each of this round's " +
+  "top edge picks - the try-scorer selections where the model's probability most " +
+  "exceeded the bookmaker's implied probability. A winning pick returns the decimal " +
+  "odds minus the $1 stake; a losing pick loses the $1. Picks whose match has not " +
+  "been scored yet are excluded, so a round with none settled shows a dash."
+
 /**
  * Per-round betting profit/loss. Shown per $1 staked, matching the units the
  * API returns; the dashboard is where a stake can be applied. A round with
@@ -12,12 +23,28 @@ import SeasonSelect from './SeasonSelect'
  */
 function PLCell({ entry }) {
   if (!entry || !entry.settled) {
-    return <span className="round-bar-pl round-bar-pl-none">&mdash;</span>
+    const pending = entry ? entry.picks : 0
+    return (
+      <span
+        className="round-bar-pl round-bar-pl-none"
+        title={pending
+          ? `${pending} pick${pending === 1 ? '' : 's'} captured, none settled yet. ${PL_EXPLAINER}`
+          : `No edge picks captured for this round. ${PL_EXPLAINER}`}
+      >
+        &mdash;
+      </span>
+    )
   }
   const pl = entry.profit_per_unit_stake
   const cls = pl > 0 ? 'round-bar-pl-up' : pl < 0 ? 'round-bar-pl-down' : ''
+  const unsettled = entry.picks - entry.settled
   return (
-    <span className={`round-bar-pl ${cls}`.trim()}>
+    <span
+      className={`round-bar-pl ${cls}`.trim()}
+      title={`${entry.wins}W / ${entry.losses}L from ${entry.settled} settled pick${entry.settled === 1 ? '' : 's'}` +
+        (unsettled ? `, ${unsettled} still pending` : '') +
+        `. ${PL_EXPLAINER}`}
+    >
       {pl > 0 ? '+' : ''}{pl.toFixed(2)}
     </span>
   )
@@ -92,8 +119,10 @@ export default function AccuracyDashboard({ apiBase }) {
         </div>
       ) : (
         <>
-          <div className="accuracy-cards">
-            <div className="accuracy-card">
+          <div className="accuracy-section">
+            <h3 className="section-title">Season Totals</h3>
+            <div className="accuracy-cards">
+              <div className="accuracy-card">
               <div className="accuracy-card-title">Win Predictions</div>
               <div className="accuracy-pct">{(win.accuracy * 100).toFixed(1)}%</div>
               <div className="accuracy-detail">{win.correct} / {win.total} correct</div>
@@ -114,7 +143,8 @@ export default function AccuracyDashboard({ apiBase }) {
               <div className="accuracy-pct">{(multi.hit_rate * 100).toFixed(1)}%</div>
               <div className="accuracy-detail">{multi.all_scored} / {multi.total} all scored, avg {multi.avg_hits}/3 hits</div>
               <div className="accuracy-bar-track">
-                <div className="accuracy-bar-fill" style={{ width: `${multi.hit_rate * 100}%` }} />
+                  <div className="accuracy-bar-fill" style={{ width: `${multi.hit_rate * 100}%` }} />
+                </div>
               </div>
             </div>
           </div>
@@ -123,11 +153,16 @@ export default function AccuracyDashboard({ apiBase }) {
           {data.by_round && data.by_round.length > 0 && (
             <div className="accuracy-section">
               <h3 className="section-title">Accuracy by Round</h3>
-              <p className="section-note">
-                P/L is profit or loss per $1 staked on that round&rsquo;s edge picks.
-                Rounds with no settled picks show &mdash;.
-              </p>
               <div className="round-accuracy-chart">
+                <div className="round-bar-head">
+                  <span>Rd</span>
+                  <span>Win rate</span>
+                  <span />
+                  <span className="round-bar-head-right">Record</span>
+                  <span className="round-bar-head-right" title={PL_EXPLAINER}>
+                    P/L <span className="round-bar-head-info" aria-hidden="true">&#9432;</span>
+                  </span>
+                </div>
                 {data.by_round.map(r => {
                   const winPct = r.total > 0 ? (r.win_correct / r.total) * 100 : 0
                   return (

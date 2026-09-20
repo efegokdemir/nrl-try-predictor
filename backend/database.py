@@ -1603,6 +1603,7 @@ def upsert_prediction(match_url: str, season: int, round_number: int, model_vers
     conn.close()
 
 
+@_cached_query("accuracy_stats", ttl=300)
 def get_accuracy_stats(model_version: int = None, season: int = None) -> dict:
     """Get aggregate accuracy stats, optionally filtered by model version and season."""
     conn = get_db()
@@ -1724,6 +1725,7 @@ def save_edge_pick(match_url: str, season: int, round_number: int, home_team: st
     conn.close()
 
 
+@_cached_query("betting_summary", ttl=300)
 def get_betting_summary() -> dict:
     """
     Simulate profit/loss (per $1 of stake) from betting on every captured

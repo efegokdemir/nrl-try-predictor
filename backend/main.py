@@ -353,6 +353,8 @@ async def _backfill_predictions():
             await asyncio.sleep(0.5)  # rate limit NRL API
         except Exception as e:
             logger.warning(f"Failed to record prediction for {match['match_url']}: {e}")
+    if recorded:
+        invalidate_cache()
     logger.info(f"Backfilled {recorded}/{len(unrecorded)} predictions.")
 
 

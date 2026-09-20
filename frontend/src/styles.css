@@ -1099,6 +1099,7 @@ body {
   gap: 0.75rem;
   padding: 0.4rem 1rem;
   min-width: max-content;
+  flex: 1 1 auto;
 }
 
 .player-card.clickable {
@@ -1188,11 +1189,16 @@ body {
   line-height: 1.4;
 }
 
+/* Anchored to the right edge of the main row (which grows to fill the card) so
+   the model price always sits immediately left of the bookmaker strip. Packed
+   left after the name it landed at a different x on every row — player names
+   vary in width — so there was nothing to read the prices against. */
 .player-model-block {
   display: flex;
   flex-direction: column;
   align-items: center;
   flex-shrink: 0;
+  margin-left: auto;
   padding: 0.25rem 0.5rem;
   width: 68px;
   background: #eff6ff;
@@ -4189,6 +4195,7 @@ body {
     min-width: 0;
     flex-wrap: wrap;
     padding: 0.6rem 0.75rem;
+    flex: 0 0 auto;
   }
 
   .player-card-chevron {

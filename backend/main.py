@@ -38,7 +38,7 @@ from database import (
     get_player_headshot, update_player_headshots,
     save_cache_entry, load_all_cache_entries,
     prune_old_logs,
-    get_edge_pick, save_edge_pick, get_betting_summary,
+    get_edge_pick, save_edge_pick, get_betting_summary, get_prediction_seasons,
 )
 from odds_client import (
     add_implied_odds_to_players,
@@ -1403,6 +1403,14 @@ def _theme_to_colour(theme: dict) -> str:
     return colour_map.get(key, "#333333")
 
 
+def _selectable_seasons():
+    """Seasons the year selector should offer. Always includes the current
+    one even before it has any settled predictions -- otherwise the selector
+    would drop the season you are actually in every January, leaving no way
+    back to it from a prior year."""
+    return sorted(set(get_prediction_seasons()) | {SEASON}, reverse=True)
+
+
 @app.get("/api/accuracy")
 async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int = SEASON):
     """Get prediction accuracy stats for the served model, this season, by
@@ -1412,18 +1420,23 @@ async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int 
     with this season round 1. Explicit ?model_version= / ?season= still reach
     the history, and the by_model breakdown spans every version regardless of
     the model filter, so nothing is hidden by defaulting these."""
-    return get_accuracy_stats(model_version=model_version, season=season)
+    stats = get_accuracy_stats(model_version=model_version, season=season)
+    # New dict: stats is a cached object shared with every other caller, so
+    # it must not be mutated here.
+    return {**stats, "season": season, "seasons": _selectable_seasons()}
 
 
 @app.get("/api/dashboard")
-async def get_dashboard():
+async def get_dashboard(season: int = SEASON):
     """Overview data for the home dashboard: accuracy stats plus the
     betting-edge profit/loss simulation. Both are scoped to the current
     season -- neither is a career total, and pooling seasons would blend a
     finished season results into this one indefinitely."""
     return {
-        "accuracy": get_accuracy_stats(model_version=CHAMPION_MODEL_VERSION, season=SEASON),
-        "betting": get_betting_summary(season=SEASON),
+        "accuracy": get_accuracy_stats(model_version=CHAMPION_MODEL_VERSION, season=season),
+        "betting": get_betting_summary(season=season),
+        "season": season,
+        "seasons": _selectable_seasons(),
     }
 
 

@@ -1725,6 +1725,21 @@ def save_edge_pick(match_url: str, season: int, round_number: int, home_team: st
     conn.close()
 
 
+@_cached_query("prediction_seasons", ttl=300)
+def get_prediction_seasons() -> list:
+    """Seasons that actually have a settled prediction recorded, newest
+    first. This is what the accuracy/dashboard year selector offers, so it
+    lists only seasons with something to show rather than every season the
+    scraper covers."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT DISTINCT season FROM predictions WHERE actual_winner IS NOT NULL"
+        " ORDER BY season DESC"
+    ).fetchall()
+    conn.close()
+    return [r["season"] for r in rows]
+
+
 @_cached_query("betting_summary", ttl=300)
 def get_betting_summary(season: int = None) -> dict:
     """

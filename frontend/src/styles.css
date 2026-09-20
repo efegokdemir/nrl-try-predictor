@@ -2738,6 +2738,35 @@ body {
   font-weight: 700;
 }
 
+/* Year picker shared by the accuracy page and the dashboard. Both pages are
+   per-season rather than career totals, so this doubles as an on-screen label
+   for the scope of the numbers beside it. The <select> itself reuses the
+   app-wide .season-select styling so it matches the dropdowns on the team and
+   player pages; only the wrapper and its label are new. */
+.season-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.season-picker-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+/* Right-aligned in the accuracy page's flex header; on its own line under the
+   dashboard's block header. */
+.accuracy-header .season-picker {
+  margin-left: auto;
+}
+
+.dashboard-header .season-picker {
+  margin-top: 0.75rem;
+}
+
 .accuracy-filters {
   display: flex;
   gap: 0.5rem;

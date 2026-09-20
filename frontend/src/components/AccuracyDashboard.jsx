@@ -4,22 +4,34 @@ import LoadingSpinner from './LoadingSpinner'
 import { fetchJson } from '../api'
 import SeasonSelect from './SeasonSelect'
 
+// The API returns profit per $1 staked so the dashboard can scale it by
+// whatever stake the user types. This page has no stake control, so it shows a
+// flat $10 bet -- the same figure Dashboard.jsx starts from (DEFAULT_STAKE),
+// so the two pages agree rather than quietly using different units.
+const PL_STAKE = 10
+
 // How the P/L column is derived, surfaced as a tooltip. Mirrors
-// get_betting_summary(): a won pick returns the decimal odds less the $1
-// stake, a lost pick costs the $1, and a pick whose match has no score yet is
-// left out entirely rather than counted as zero.
+// get_betting_summary(): a won pick returns the decimal odds less the stake, a
+// lost pick costs the stake, and a pick whose match has no score yet is left
+// out entirely rather than counted as zero.
 const PL_EXPLAINER =
-  "Profit or loss per $1 staked, simulating a flat $1 bet on each of this round's " +
-  "top edge picks - the try-scorer selections where the model's probability most " +
-  "exceeded the bookmaker's implied probability. A winning pick returns the decimal " +
-  "odds minus the $1 stake; a losing pick loses the $1. Picks whose match has not " +
-  "been scored yet are excluded, so a round with none settled shows a dash."
+  `Profit or loss from a flat $${PL_STAKE} bet on each of this round's top edge ` +
+  "picks - the try-scorer selections where the model's probability most exceeded " +
+  "the bookmaker's implied probability. A winning pick returns the stake times the " +
+  "decimal odds, less the stake; a losing pick loses the stake. Picks whose match " +
+  "has not been scored yet are excluded, so a round with none settled shows a dash."
+
+// Signed dollar amount, e.g. +$30.00 / -$10.00.
+function fmtPL(profitPerUnit) {
+  const amount = profitPerUnit * PL_STAKE
+  const sign = amount > 0 ? '+' : amount < 0 ? '-' : ''
+  return `${sign}$${Math.abs(amount).toFixed(2)}`
+}
 
 /**
- * Per-round betting profit/loss. Shown per $1 staked, matching the units the
- * API returns; the dashboard is where a stake can be applied. A round with
- * picks that have not settled yet is still "no result", so it reads as a dash
- * rather than 0.00, which would wrongly look like a break-even round.
+ * Per-round betting profit/loss, shown as dollars on a flat PL_STAKE bet. A
+ * round whose picks have not settled yet is still "no result", so it reads as
+ * a dash rather than $0.00, which would wrongly look like a break-even round.
  */
 function PLCell({ entry }) {
   if (!entry || !entry.settled) {
@@ -45,7 +57,7 @@ function PLCell({ entry }) {
         (unsettled ? `, ${unsettled} still pending` : '') +
         `. ${PL_EXPLAINER}`}
     >
-      {pl > 0 ? '+' : ''}{pl.toFixed(2)}
+      {fmtPL(pl)}
     </span>
   )
 }
@@ -58,8 +70,8 @@ function PLCell({ entry }) {
 function rowLabel(r, winPct, entry) {
   const base = `Round ${r.round_number}: ${winPct.toFixed(0)}% of win predictions correct, ${r.win_correct} of ${r.total}`
   if (!entry || !entry.settled) return `${base}. No settled betting picks.`
-  const pl = entry.profit_per_unit_stake
-  return `${base}. Profit and loss ${pl >= 0 ? 'plus' : 'minus'} ${Math.abs(pl).toFixed(2)} per dollar staked.`
+  const pl = entry.profit_per_unit_stake * PL_STAKE
+  return `${base}. Profit and loss ${pl >= 0 ? 'plus' : 'minus'} ${Math.abs(pl).toFixed(2)} dollars on ${PL_STAKE} dollar stakes.`
 }
 
 export default function AccuracyDashboard({ apiBase }) {
@@ -160,7 +172,7 @@ export default function AccuracyDashboard({ apiBase }) {
                   <span />
                   <span className="round-bar-head-right">Record</span>
                   <span className="round-bar-head-right" title={PL_EXPLAINER}>
-                    P/L <span className="round-bar-head-info" aria-hidden="true">&#9432;</span>
+                    P/L ($10) <span className="round-bar-head-info" aria-hidden="true">&#9432;</span>
                   </span>
                 </div>
                 {data.by_round.map(r => {

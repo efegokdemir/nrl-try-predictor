@@ -2889,7 +2889,7 @@ body {
    row content rather than the padded hover target. */
 .round-bar-head {
   display: grid;
-  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 3.6rem;
+  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 5rem;
   align-items: center;
   gap: 0.5rem;
   padding: 0 0.35rem 0.35rem;
@@ -2914,7 +2914,7 @@ body {
 
 .round-bar-row {
   display: grid;
-  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 3.6rem;
+  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 5rem;
   align-items: center;
   gap: 0.5rem;
   padding: 0.15rem 0.35rem;

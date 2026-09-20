@@ -15,8 +15,21 @@ uvicorn main:app --reload --port 8000        # dev server
 python scrape_job.py                         # one-shot: full historical scrape if DB empty, else incremental sync
 python -c "from scraper import run_scraper; run_scraper()"          # force full historical scrape (2020-2026)
 python -c "from scraper import run_sync_current_season; run_sync_current_season()"  # sync current season only
+
+pip install -r requirements.txt -r requirements-dev.txt   # adds pytest
+pytest                                        # the whole suite, ~1s
 ```
-There is no test suite or linter configured for the backend.
+**The test suite needs no database and no network.** Everything either exercises
+pure logic or swaps `database._pool` for the fake in `tests/conftest.py`, so
+`pytest` works on a laptop with nothing running. Keep it that way: a suite that
+needs Supabase reachable is a suite nobody runs. There is no linter configured.
+
+Two of the tests are structural rather than behavioural — they read
+`database.py`'s source and fail on a `conn = get_db()` that isn't followed by
+`try:`, or a `conn.close()` that isn't inside a `finally:`. Both encode bugs
+that actually shipped (a leaked connection exhausts the 20-slot pool; a
+double-returned one raises `PoolError`), and both are the kind of thing a
+per-function test can't catch in code that doesn't exist yet.
 
 ### Frontend (from `frontend/`)
 ```

@@ -209,6 +209,7 @@ async def _warm_cache():
         await asyncio.sleep(2)
         logger.info("Warming cache for all rounds...")
 
+        latest = None
         for r in range(1, TOTAL_ROUNDS + 1):
             try:
                 result = await _refresh_round_cache(r)
@@ -218,6 +219,7 @@ async def _warm_cache():
                 if not result.get("matches"):
                     logger.info(f"Round {r} has no fixtures, stopping warmup.")
                     break
+                latest = (r, result)
                 logger.info(f"Warmed round {r}.")
             except Exception as e:
                 logger.warning(f"Failed to warm round {r}: {e}")
@@ -226,10 +228,48 @@ async def _warm_cache():
             await asyncio.sleep(0.5)
 
         logger.info("Cache warmup complete.")
+
+        # The round pages are warm now, but /api/match is not, and the first
+        # view of any given match pays the whole model pipeline against a cold
+        # query cache -- measured at ~5s against production. Warming the latest
+        # round's matches moves that cost off the first visitor.
+        #
+        # Gated, unlike the rest of _warm_cache, because _compute_match_detail
+        # WRITES: it records predictions for completed matches and captures
+        # edge picks. Ungated, a laptop pointed at a production DATABASE_URL
+        # would write to production at startup, which is exactly what
+        # ENABLE_SYNC_LOOPS exists to prevent.
+        if latest and ENABLE_SYNC_LOOPS:
+            await _warm_round_matches(*latest)
     except asyncio.CancelledError:
         pass
     except Exception as e:
         logger.warning(f"Cache warmup failed (non-critical): {e}")
+
+
+async def _warm_round_matches(round_number, round_response):
+    """Pre-compute /api/match for one round's fixtures, so their first visitor
+    gets a cache hit. Deliberately serial with a delay between matches: this is
+    background work competing with real requests for the same free-tier DB and
+    the same NRL endpoints, and there is no deadline on it."""
+    urls = [m.get("match_url") for m in round_response.get("matches", []) if m.get("match_url")]
+    if not urls:
+        return
+    logger.info(f"Warming {len(urls)} match detail(s) for round {round_number}...")
+    warmed = 0
+    for url in urls:
+        try:
+            await _refresh_match_cache(url)
+            warmed += 1
+        except HTTPException as e:
+            # 403 simply means team lists are not published yet -- expected for
+            # an upcoming round, and not worth a warning.
+            if e.status_code != 403:
+                logger.warning(f"Failed to warm match {url}: {e.detail}")
+        except Exception as e:
+            logger.warning(f"Failed to warm match {url}: {e}")
+        await asyncio.sleep(0.5)
+    logger.info(f"Warmed {warmed}/{len(urls)} match details for round {round_number}.")
 
 
 PREDICTION_SYNC_INTERVAL = 600  # 10 minutes

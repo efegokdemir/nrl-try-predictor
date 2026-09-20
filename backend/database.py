@@ -31,9 +31,36 @@ def _cache_key(func_name, *args, **kwargs):
     return (func_name, args, kw_tuple)
 
 
-def _cached_query(func_name, ttl=CACHE_TTL):
-    """Decorator that caches DB query results for `ttl` seconds."""
+# Keys currently being refreshed in the background by a stale_while_revalidate
+# query, so concurrent callers queue one refresh rather than one each.
+_refreshing_keys = set()
+
+
+def _cached_query(func_name, ttl=CACHE_TTL, stale_while_revalidate=False):
+    """Decorator that caches DB query results for `ttl` seconds.
+
+    With `stale_while_revalidate`, an expired entry is served immediately and
+    refreshed on a background thread instead of making one unlucky caller wait
+    for the query. Worth it only where the recompute is slow enough to be felt
+    and the data tolerates being a cycle behind -- the dashboard aggregates,
+    where expiry otherwise handed somebody a multi-second page load every time
+    the TTL lapsed. The first call for a key still blocks: there is nothing
+    stale to serve yet.
+    """
     def decorator(func):
+        def refresh(key, *args, **kwargs):
+            try:
+                value = func(*args, **kwargs)
+                with _cache_lock:
+                    _query_cache[key] = (value, time.monotonic())
+            except Exception as e:
+                # The caller already has its answer; a failed refresh just
+                # means the stale entry is served again next time.
+                logger.warning(f"Background refresh of {func_name} failed: {e}")
+            finally:
+                with _cache_lock:
+                    _refreshing_keys.discard(key)
+
         def wrapper(*args, **kwargs):
             key = _cache_key(func_name, *args, **kwargs)
             now = time.monotonic()
@@ -41,6 +68,14 @@ def _cached_query(func_name, ttl=CACHE_TTL):
                 if key in _query_cache:
                     val, ts = _query_cache[key]
                     if now - ts < ttl:
+                        return val
+                    if stale_while_revalidate:
+                        if key not in _refreshing_keys:
+                            _refreshing_keys.add(key)
+                            threading.Thread(
+                                target=refresh, args=(key, *args), kwargs=kwargs,
+                                daemon=True,
+                            ).start()
                         return val
             result = func(*args, **kwargs)
             with _cache_lock:
@@ -56,6 +91,10 @@ def clear_query_cache():
     global _query_cache
     with _cache_lock:
         _query_cache.clear()
+        # A refresh still in flight would otherwise repopulate a key from a
+        # query that started before the invalidation, and its marker would
+        # block the next legitimate refresh.
+        _refreshing_keys.clear()
 
 
 # Make psycopg2 return float instead of Decimal for numeric/real columns
@@ -1603,7 +1642,7 @@ def upsert_prediction(match_url: str, season: int, round_number: int, model_vers
     conn.close()
 
 
-@_cached_query("accuracy_stats", ttl=300)
+@_cached_query("accuracy_stats", ttl=300, stale_while_revalidate=True)
 def get_accuracy_stats(model_version: int = None, season: int = None) -> dict:
     """Get aggregate accuracy stats, optionally filtered by model version and season."""
     conn = get_db()
@@ -1725,7 +1764,7 @@ def save_edge_pick(match_url: str, season: int, round_number: int, home_team: st
     conn.close()
 
 
-@_cached_query("prediction_seasons", ttl=300)
+@_cached_query("prediction_seasons", ttl=300, stale_while_revalidate=True)
 def get_prediction_seasons() -> list:
     """Seasons that actually have a settled prediction recorded, newest
     first. This is what the accuracy/dashboard year selector offers, so it
@@ -1740,7 +1779,7 @@ def get_prediction_seasons() -> list:
     return [r["season"] for r in rows]
 
 
-@_cached_query("betting_summary", ttl=300)
+@_cached_query("betting_summary", ttl=300, stale_while_revalidate=True)
 def get_betting_summary(season: int = None) -> dict:
     """
     Simulate profit/loss (per $1 of stake) from betting on every captured
@@ -1763,6 +1802,35 @@ def get_betting_summary(season: int = None) -> dict:
     else:
         picks = conn.execute("SELECT * FROM edge_picks ORDER BY captured_at ASC, pick_rank ASC").fetchall()
 
+    # Resolve every pick's match and try-scorers in two queries rather than two
+    # per pick. Against a remote Postgres the per-pick version was dominated by
+    # round-trip latency, not by the work: ~2N round trips for a handful of
+    # rows each.
+    match_urls = list({p["match_url"] for p in picks})
+    matches_by_url = {}
+    if match_urls:
+        placeholders = ", ".join(["%s"] * len(match_urls))
+        for row in conn.execute(
+            f"SELECT match_url, id, home_score, away_score FROM matches"
+            f" WHERE match_url IN ({placeholders})",
+            tuple(match_urls),
+        ).fetchall():
+            matches_by_url[row["match_url"]] = row
+
+    # Only matches with a score can settle a pick, so only those need scorers.
+    settled_ids = [
+        m["id"] for m in matches_by_url.values()
+        if m["home_score"] is not None and m["away_score"] is not None
+    ]
+    scorers = set()
+    if settled_ids:
+        placeholders = ", ".join(["%s"] * len(settled_ids))
+        for row in conn.execute(
+            f"SELECT match_id, player_name FROM tries WHERE match_id IN ({placeholders})",
+            tuple(settled_ids),
+        ).fetchall():
+            scorers.add((row["match_id"], row["player_name"]))
+
     results = []
     wins = 0
     losses = 0
@@ -1770,18 +1838,12 @@ def get_betting_summary(season: int = None) -> dict:
     by_round = {}
 
     for pick in picks:
-        match = conn.execute(
-            "SELECT id, home_score, away_score FROM matches WHERE match_url = %s",
-            (pick["match_url"],),
-        ).fetchone()
+        match = matches_by_url.get(pick["match_url"])
 
         status = "pending"
         profit = 0.0
         if match is not None and match["home_score"] is not None and match["away_score"] is not None:
-            scored = conn.execute(
-                "SELECT 1 FROM tries WHERE match_id = %s AND player_name = %s LIMIT 1",
-                (match["id"], pick["player_name"]),
-            ).fetchone() is not None
+            scored = (match["id"], pick["player_name"]) in scorers
             if scored:
                 status = "won"
                 profit = pick["bookmaker_decimal_odds"] - 1

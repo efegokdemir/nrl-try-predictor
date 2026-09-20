@@ -30,6 +30,9 @@ match data scraped from the public NRL website API.
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000        # dev server
 python scrape_job.py                         # one-shot: full historical scrape if DB empty, else incremental sync
+
+pip install -r requirements-dev.txt          # adds pytest
+pytest                                       # test suite (no database or network needed)
 ```
 
 ### Frontend (from `frontend/`)

@@ -1,0 +1,6 @@
+# Test-only dependencies. Deliberately NOT in requirements.txt: the Dockerfile
+# installs only that file, so the production image stays free of test tooling.
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest
+-r requirements.txt
+pytest==8.3.3

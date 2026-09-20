@@ -1800,7 +1800,6 @@ def get_team_rest_days(team_name: str, season: int, round_number: int) -> int:
             LIMIT 1
         """, (team_name, team_name, season, season, round_number)).fetchone()
         if not row or not row["kickoff"]:
-            conn.close()
             return -1
         # Also get current match kickoff
         cur_row = conn.execute("""

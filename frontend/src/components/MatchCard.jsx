@@ -39,6 +39,15 @@ export function formatMatchTime(dt) {
   return d.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })
 }
 
+// The route a match card navigates to. Lives here beside the card itself so
+// the two screens that list matches don't each carry their own copy of the
+// URL shape — /match reads the NRL path from `url`, and a fixture without
+// one (a bye, or a round NRL hasn't fleshed out yet) isn't navigable.
+export function matchPath(match) {
+  if (!match.match_url) return null
+  return `/match?url=${encodeURIComponent(match.match_url)}`
+}
+
 // Shared match-card presentation, used by both the round tab (Draw.jsx) and
 // any other view that lists matches (e.g. a team's season schedule) — keeps
 // them visually identical instead of maintaining two copies of this markup.

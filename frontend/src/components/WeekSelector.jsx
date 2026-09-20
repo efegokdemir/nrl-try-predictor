@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import LoadingSpinner from './LoadingSpinner'
-import MatchCard from './MatchCard'
+import MatchCard, { matchPath } from './MatchCard'
 import TeamSelect from './TeamSelect'
 import { fetchJson, getCurrentSeasonYear } from '../api'
 
@@ -55,8 +55,8 @@ export default function WeekSelector({ apiBase }) {
   }, [rounds, roundOrder])
 
   const handleMatchClick = (match) => {
-    if (!match.match_url) return
-    navigate(`/match?url=${encodeURIComponent(match.match_url)}`)
+    const path = matchPath(match)
+    if (path) navigate(path)
   }
 
   return (

@@ -1501,15 +1501,17 @@ def get_accuracy_stats(model_version: int = None, season: int = None) -> dict:
             FROM predictions {where} AND multi_hits IS NOT NULL
         """, params).fetchone()
 
-        # By round
+        # By round. Only the three columns the accuracy page's per-round bars
+        # actually render -- round number, games, wins. It used to also select
+        # try_hits/try_total/multi_all_hit/multi_hits, which no caller read;
+        # try_total was additionally computed as COUNT(*) * 6 without the
+        # `top3_hits IS NOT NULL` filter its headline counterpart above uses,
+        # so had anything rendered it, the per-round try rate would have
+        # quietly disagreed with the overall one.
         by_round = conn.execute(f"""
             SELECT round_number,
                    COUNT(*) as total,
-                   SUM(CASE WHEN win_correct = 1 THEN 1 ELSE 0 END) as win_correct,
-                   SUM(top3_hits) as try_hits,
-                   COUNT(*) * 6 as try_total,
-                   SUM(CASE WHEN multi_all_scored = 1 THEN 1 ELSE 0 END) as multi_all_hit,
-                   SUM(multi_hits) as multi_hits
+                   SUM(CASE WHEN win_correct = 1 THEN 1 ELSE 0 END) as win_correct
             FROM predictions {where}
             GROUP BY round_number ORDER BY round_number
         """, params).fetchall()

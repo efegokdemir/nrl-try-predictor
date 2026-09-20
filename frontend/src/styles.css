@@ -43,10 +43,6 @@ body {
   flex-direction: column;
 }
 
-.main {
-  flex: 1 0 auto;
-}
-
 /* Header */
 .header {
   background: rgba(255, 255, 255, 0.9);
@@ -77,6 +73,7 @@ body {
 
 /* Main */
 .main {
+  flex: 1 0 auto;
   width: 100%;
   max-width: 1200px;
   margin: 0 auto;
@@ -84,7 +81,6 @@ body {
 }
 
 .loading {
-  text-align: center;
   padding: 4rem;
   color: #666666;
   font-size: 1.1rem;

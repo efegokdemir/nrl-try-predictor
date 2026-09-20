@@ -1404,21 +1404,26 @@ def _theme_to_colour(theme: dict) -> str:
 
 
 @app.get("/api/accuracy")
-async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int = None):
-    """Get prediction accuracy stats for the served model by default. An
-    explicit ?model_version= still reaches the retired V1/V2 history, and the
-    by_model breakdown in the response always spans every version regardless
-    of this filter, so nothing is hidden by defaulting it."""
+async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int = SEASON):
+    """Get prediction accuracy stats for the served model, this season, by
+    default. Both filters matter. Without the model one, the retired V1/V2 rows
+    triple-count the rounds they ran in. Without the season one, by_round groups
+    on round_number alone, so next season round 1 would be silently averaged in
+    with this season round 1. Explicit ?model_version= / ?season= still reach
+    the history, and the by_model breakdown spans every version regardless of
+    the model filter, so nothing is hidden by defaulting these."""
     return get_accuracy_stats(model_version=model_version, season=season)
 
 
 @app.get("/api/dashboard")
 async def get_dashboard():
     """Overview data for the home dashboard: accuracy stats plus the
-    betting-edge profit/loss simulation."""
+    betting-edge profit/loss simulation. Both are scoped to the current
+    season -- neither is a career total, and pooling seasons would blend a
+    finished season results into this one indefinitely."""
     return {
-        "accuracy": get_accuracy_stats(model_version=CHAMPION_MODEL_VERSION, season=None),
-        "betting": get_betting_summary(),
+        "accuracy": get_accuracy_stats(model_version=CHAMPION_MODEL_VERSION, season=SEASON),
+        "betting": get_betting_summary(season=SEASON),
     }
 
 

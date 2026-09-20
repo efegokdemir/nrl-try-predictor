@@ -581,9 +581,18 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
 app.add_middleware(CacheControlMiddleware)
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health_check():
-    """Lightweight health check — keeps Render from sleeping."""
+    """Lightweight health check — keeps Render from sleeping.
+
+    HEAD as well as GET, because uptime monitors default to HEAD and FastAPI,
+    unlike plain Starlette, does not add it to a GET route automatically. The
+    UptimeRobot monitor this endpoint exists for was getting 405 and reporting
+    the service down. The request still woke Render either way -- a 405 comes
+    from the app, so the app had to be running to send it -- which is the
+    failure mode worth knowing about: the ping was doing its job while the
+    dashboard said otherwise, so a real outage would have looked identical.
+    """
     return {"status": "ok"}
 
 

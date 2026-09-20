@@ -4,6 +4,37 @@ import LoadingSpinner from './LoadingSpinner'
 import { fetchJson } from '../api'
 import SeasonSelect from './SeasonSelect'
 
+/**
+ * Per-round betting profit/loss. Shown per $1 staked, matching the units the
+ * API returns; the dashboard is where a stake can be applied. A round with
+ * picks that have not settled yet is still "no result", so it reads as a dash
+ * rather than 0.00, which would wrongly look like a break-even round.
+ */
+function PLCell({ entry }) {
+  if (!entry || !entry.settled) {
+    return <span className="round-bar-pl round-bar-pl-none">&mdash;</span>
+  }
+  const pl = entry.profit_per_unit_stake
+  const cls = pl > 0 ? 'round-bar-pl-up' : pl < 0 ? 'round-bar-pl-down' : ''
+  return (
+    <span className={`round-bar-pl ${cls}`.trim()}>
+      {pl > 0 ? '+' : ''}{pl.toFixed(2)}
+    </span>
+  )
+}
+
+/**
+ * Spoken label for a round row. The row is a link with an aria-label, which
+ * replaces its contents for assistive tech -- so the P/L has to be said here
+ * too, or it is simply absent for anyone using a screen reader.
+ */
+function rowLabel(r, winPct, entry) {
+  const base = `Round ${r.round_number}: ${winPct.toFixed(0)}% of win predictions correct, ${r.win_correct} of ${r.total}`
+  if (!entry || !entry.settled) return `${base}. No settled betting picks.`
+  const pl = entry.profit_per_unit_stake
+  return `${base}. Profit and loss ${pl >= 0 ? 'plus' : 'minus'} ${Math.abs(pl).toFixed(2)} per dollar staked.`
+}
+
 export default function AccuracyDashboard({ apiBase }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -36,6 +67,11 @@ export default function AccuracyDashboard({ apiBase }) {
   const multi = data.multi
 
   const noData = win.total === 0
+
+  // Betting P/L keyed by round, so each bar row can look its own up. Rounds
+  // with no captured edge picks simply have no entry.
+  const plByRound = {}
+  for (const r of data.betting_by_round || []) plByRound[r.round_number] = r
 
   return (
     <div className="accuracy-dashboard">
@@ -87,6 +123,10 @@ export default function AccuracyDashboard({ apiBase }) {
           {data.by_round && data.by_round.length > 0 && (
             <div className="accuracy-section">
               <h3 className="section-title">Accuracy by Round</h3>
+              <p className="section-note">
+                P/L is profit or loss per $1 staked on that round&rsquo;s edge picks.
+                Rounds with no settled picks show &mdash;.
+              </p>
               <div className="round-accuracy-chart">
                 {data.by_round.map(r => {
                   const winPct = r.total > 0 ? (r.win_correct / r.total) * 100 : 0
@@ -95,7 +135,7 @@ export default function AccuracyDashboard({ apiBase }) {
                       key={r.round_number}
                       to={`/round/${r.round_number}?season=${data.season}`}
                       className="round-bar-row"
-                      aria-label={`Round ${r.round_number}: ${winPct.toFixed(0)}% of win predictions correct, ${r.win_correct} of ${r.total}`}
+                      aria-label={rowLabel(r, winPct, plByRound[r.round_number])}
                     >
                       <span className="round-bar-label">R{r.round_number}</span>
                       <div className="round-bar-track">
@@ -103,6 +143,7 @@ export default function AccuracyDashboard({ apiBase }) {
                       </div>
                       <span className="round-bar-pct">{winPct.toFixed(0)}%</span>
                       <span className="round-bar-count">{r.win_correct}/{r.total}</span>
+                      <PLCell entry={plByRound[r.round_number]} />
                     </Link>
                   )
                 })}

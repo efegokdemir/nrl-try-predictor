@@ -91,14 +91,19 @@ export default function AccuracyDashboard({ apiBase }) {
                 {data.by_round.map(r => {
                   const winPct = r.total > 0 ? (r.win_correct / r.total) * 100 : 0
                   return (
-                    <div key={r.round_number} className="round-bar-row">
+                    <Link
+                      key={r.round_number}
+                      to={`/round/${r.round_number}?season=${data.season}`}
+                      className="round-bar-row"
+                      aria-label={`Round ${r.round_number}: ${winPct.toFixed(0)}% of win predictions correct, ${r.win_correct} of ${r.total}`}
+                    >
                       <span className="round-bar-label">R{r.round_number}</span>
                       <div className="round-bar-track">
                         <div className="round-bar-fill" style={{ width: `${winPct}%` }} />
                       </div>
                       <span className="round-bar-pct">{winPct.toFixed(0)}%</span>
                       <span className="round-bar-count">{r.win_correct}/{r.total}</span>
-                    </div>
+                    </Link>
                   )
                 })}
               </div>

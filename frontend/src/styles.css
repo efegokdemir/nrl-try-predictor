@@ -2877,12 +2877,37 @@ body {
 
 /* One row per round, stacked down the page. This used to be a row of ~29
    vertical columns at min-width 35px each (~1000px), which overflowed every
-   normal viewport and relied on overflow-x: auto to stay usable. */
+   normal viewport and relied on overflow-x: auto to stay usable.
+
+   Each row links through to that round's page, carrying the season the
+   accuracy page is currently scoped to, so R5 of 2025 does not open R5 of the
+   current season. The negative margin cancels the hover padding so the bars
+   stay flush with the card edge. */
 .round-bar-row {
   display: grid;
   grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem;
   align-items: center;
   gap: 0.5rem;
+  padding: 0.15rem 0.35rem;
+  margin: 0 -0.35rem;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.round-bar-row:hover {
+  background: #f4f4f5;
+}
+
+.round-bar-row:focus-visible {
+  background: #f4f4f5;
+  outline: 2px solid #22c55e;
+  outline-offset: 1px;
+}
+
+.round-bar-row:hover .round-bar-label {
+  color: #555;
 }
 
 .round-bar-row .round-bar-track {

@@ -841,6 +841,19 @@ _round_cache_lock = threading.Lock()
 _round_drawn_verified = {}
 _MISSING = object()  # sentinel: a verified round title may itself be None
 _round_refreshing = set()  # round numbers currently being refreshed in background
+
+# Match-detail response cache: match_url -> (response, timestamp, is_completed).
+# In-memory only, deliberately NOT persisted to cache_store the way _round_cache
+# is: a restart here is almost always a deploy, and a deploy is exactly when a
+# recomputed prediction may legitimately differ, so carrying completed-match
+# responses across one would serve predictions the current model never made.
+_match_cache = {}
+_match_cache_lock = threading.Lock()
+_match_refreshing = set()  # match_urls currently being refreshed in background
+_MATCH_CACHE_TTL_LIVE = 120         # 2 min while a match is upcoming or in progress
+_MATCH_CACHE_TTL_COMPLETED = 21600  # 6h once full-time. The detail is immutable, so
+                                    # this is bounded only to self-heal after a model
+                                    # change, not for correctness.
 _ROUND_CACHE_TTL_LIVE = 120      # 2 min for rounds with upcoming/live matches
 _ROUND_CACHE_TTL_COMPLETED = 1800  # 30 min for fully completed rounds
 
@@ -1258,6 +1271,57 @@ def _compute_match_detail(url, raw, home_players, away_players,
     }
 
 
+async def _refresh_match_cache(url: str):
+    """Fetch, compute and cache one match's detail. Raises the same
+    HTTPExceptions the route always did, so the synchronous miss path keeps
+    its 502/403 semantics; the background stale-refresh path wraps this."""
+    try:
+        raw = await fetch_match_detail(url)
+        if raw is None:
+            raise HTTPException(status_code=502, detail="Could not fetch match data from NRL")
+
+        home_players = parse_team_list(raw, "homeTeam")
+        away_players = parse_team_list(raw, "awayTeam")
+
+        if not home_players and not away_players:
+            raise HTTPException(
+                status_code=403,
+                detail="Team lists have not been announced for this match yet"
+            )
+        # Backfill headshots in a thread so DB writes don't block the event loop
+        asyncio.create_task(asyncio.to_thread(_backfill_player_headshots, home_players, away_players))
+
+        # Fetch bookmaker odds (async) before running sync computation
+        match_state = raw.get("matchState", "")
+        is_completed = match_state in ("FullTime", "PostMatch")
+        bookmaker_data = {}
+        if has_odds_api_key() and not is_completed:
+            try:
+                bookmaker_data = await fetch_bookmaker_odds()
+            except Exception as e:
+                logger.warning(f"Failed to fetch bookmaker odds: {e}")
+
+        # Run all heavy DB/model computation in a thread
+        result = await asyncio.to_thread(
+            _compute_match_detail, url, raw, home_players, away_players,
+            bookmaker_data, is_completed, match_state
+        )
+        with _match_cache_lock:
+            _match_cache[url] = (result, time.time(), is_completed)
+        return result
+    finally:
+        _match_refreshing.discard(url)
+
+
+async def _refresh_match_cache_bg(url: str):
+    """Background stale-refresh. Never raises — the caller already returned
+    the stale response to the user, so a failure here must not surface."""
+    try:
+        await _refresh_match_cache(url)
+    except Exception as e:
+        logger.warning(f"Background match refresh failed for {url}: {e}")
+
+
 @app.get("/api/match")
 async def get_match_by_url(url: str, version: int = 3):
     # `version` is accepted for backward compatibility with old links but
@@ -1265,37 +1329,27 @@ async def get_match_by_url(url: str, version: int = 3):
     if not url.startswith("/draw/"):
         raise HTTPException(status_code=400, detail="Invalid match URL path")
 
-    raw = await fetch_match_detail(url)
-    if raw is None:
-        raise HTTPException(status_code=502, detail="Could not fetch match data from NRL")
+    # Response cache, same shape as _round_cache. This endpoint used to
+    # recompute the whole model on every view -- ~7s for a match's first
+    # view and ~2s for every repeat, measured against production -- even for
+    # a match finished weeks ago whose detail can no longer change. Checked
+    # before fetch_match_detail so a hit costs no NRL round-trip either.
+    now = time.time()
+    with _match_cache_lock:
+        cached = _match_cache.get(url)
 
-    home_players = parse_team_list(raw, "homeTeam")
-    away_players = parse_team_list(raw, "awayTeam")
+    if cached:
+        resp, ts, was_completed = cached
+        ttl = _MATCH_CACHE_TTL_COMPLETED if was_completed else _MATCH_CACHE_TTL_LIVE
+        if now - ts < ttl:
+            return resp
+        # Stale — serve immediately, refresh behind it.
+        if url not in _match_refreshing:
+            _match_refreshing.add(url)
+            asyncio.create_task(_refresh_match_cache_bg(url))
+        return resp
 
-    if not home_players and not away_players:
-        raise HTTPException(
-            status_code=403,
-            detail="Team lists have not been announced for this match yet"
-        )
-    # Backfill headshots in a thread so DB writes don't block the event loop
-    asyncio.create_task(asyncio.to_thread(_backfill_player_headshots, home_players, away_players))
-
-    # Fetch bookmaker odds (async) before running sync computation
-    match_state = raw.get("matchState", "")
-    is_completed = match_state in ("FullTime", "PostMatch")
-    bookmaker_data = {}
-    if has_odds_api_key() and not is_completed:
-        try:
-            bookmaker_data = await fetch_bookmaker_odds()
-        except Exception as e:
-            logger.warning(f"Failed to fetch bookmaker odds: {e}")
-
-    # Run all heavy DB/model computation in a thread
-    result = await asyncio.to_thread(
-        _compute_match_detail, url, raw, home_players, away_players,
-        bookmaker_data, is_completed, match_state
-    )
-    return result
+    return await _refresh_match_cache(url)
 
 
 def _build_odds_comparison(home_odds_str, away_odds_str, home_model_prob, away_model_prob):

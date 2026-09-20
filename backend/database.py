@@ -1725,17 +1725,43 @@ def save_edge_pick(match_url: str, season: int, round_number: int, home_team: st
     conn.close()
 
 
+@_cached_query("prediction_seasons", ttl=300)
+def get_prediction_seasons() -> list:
+    """Seasons that actually have a settled prediction recorded, newest
+    first. This is what the accuracy/dashboard year selector offers, so it
+    lists only seasons with something to show rather than every season the
+    scraper covers."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT DISTINCT season FROM predictions WHERE actual_winner IS NOT NULL"
+        " ORDER BY season DESC"
+    ).fetchall()
+    conn.close()
+    return [r["season"] for r in rows]
+
+
 @_cached_query("betting_summary", ttl=300)
-def get_betting_summary() -> dict:
+def get_betting_summary(season: int = None) -> dict:
     """
     Simulate profit/loss (per $1 of stake) from betting on every captured
     best-edge pick. A pick is 'settled' once its match has a recorded score;
     the pick's player is checked against the `tries` table to determine
     win/loss. Amounts are per-unit-stake so the frontend can scale by the
     user's chosen stake without a refetch.
+
+    `season` scopes the simulation to one season. Left unfiltered this pools
+    every season ever captured into one running profit/loss, so a finished
+    season would keep dragging on the current one forever; the dashboard
+    passes the current season.
     """
     conn = get_db()
-    picks = conn.execute("SELECT * FROM edge_picks ORDER BY captured_at ASC, pick_rank ASC").fetchall()
+    if season is not None:
+        picks = conn.execute(
+            "SELECT * FROM edge_picks WHERE season = %s ORDER BY captured_at ASC, pick_rank ASC",
+            (season,),
+        ).fetchall()
+    else:
+        picks = conn.execute("SELECT * FROM edge_picks ORDER BY captured_at ASC, pick_rank ASC").fetchall()
 
     results = []
     wins = 0

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import LoadingSpinner from './LoadingSpinner'
 import { fetchJson } from '../api'
+import SeasonSelect from './SeasonSelect'
 
 const DEFAULT_STAKE = 10
 
@@ -11,17 +12,18 @@ export default function Dashboard({ apiBase }) {
   const [error, setError] = useState(null)
   const [retryCount, setRetryCount] = useState(0)
   const [stake, setStake] = useState(DEFAULT_STAKE)
+  const [season, setSeason] = useState(null)
   const navigate = useNavigate()
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetchJson(`${apiBase}/dashboard`)
+    fetchJson(`${apiBase}/dashboard${season ? `?season=${season}` : ''}`)
       .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
       .catch(e => { if (!cancelled) { setError(e.message); setLoading(false) } })
     return () => { cancelled = true }
-  }, [apiBase, retryCount])
+  }, [apiBase, retryCount, season])
 
   const betting = data?.betting
   const stakeValue = Number.isFinite(stake) && stake > 0 ? stake : 0
@@ -87,6 +89,11 @@ export default function Dashboard({ apiBase }) {
       <div className="dashboard-header">
         <h2>Dashboard</h2>
         <p className="dashboard-subtitle">How the model has been performing, and what $ edge bets on its top picks per game would have made.</p>
+        <SeasonSelect
+          value={data.season}
+          options={data.seasons}
+          onChange={setSeason}
+        />
       </div>
 
       {noAccuracyData ? (

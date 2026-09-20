@@ -2,22 +2,24 @@ import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import LoadingSpinner from './LoadingSpinner'
 import { fetchJson } from '../api'
+import SeasonSelect from './SeasonSelect'
 
 export default function AccuracyDashboard({ apiBase }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [retryCount, setRetryCount] = useState(0)
+  const [season, setSeason] = useState(null)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetchJson(`${apiBase}/accuracy`)
+    fetchJson(`${apiBase}/accuracy${season ? `?season=${season}` : ''}`)
       .then(d => { if (!cancelled) { setData(d); setLoading(false) } })
       .catch(e => { if (!cancelled) { setError(e.message); setLoading(false) } })
     return () => { cancelled = true }
-  }, [apiBase, retryCount])
+  }, [apiBase, retryCount, season])
 
   if (loading) return <LoadingSpinner text="Loading accuracy data..." />
   if (error) return (
@@ -40,6 +42,11 @@ export default function AccuracyDashboard({ apiBase }) {
       <div className="accuracy-header">
         <Link to="/" className="back-link">&larr; Dashboard</Link>
         <h2>Prediction Accuracy</h2>
+        <SeasonSelect
+          value={data.season}
+          options={data.seasons}
+          onChange={setSeason}
+        />
       </div>
 
       {noData ? (
@@ -84,14 +91,12 @@ export default function AccuracyDashboard({ apiBase }) {
                 {data.by_round.map(r => {
                   const winPct = r.total > 0 ? (r.win_correct / r.total) * 100 : 0
                   return (
-                    <div key={r.round_number} className="round-bar-group">
-                      <div className="round-bar-col">
-                        <div className="round-bar-track">
-                          <div className="round-bar-fill" style={{ height: `${winPct}%` }} />
-                        </div>
-                        <span className="round-bar-pct">{winPct.toFixed(0)}%</span>
-                      </div>
+                    <div key={r.round_number} className="round-bar-row">
                       <span className="round-bar-label">R{r.round_number}</span>
+                      <div className="round-bar-track">
+                        <div className="round-bar-fill" style={{ width: `${winPct}%` }} />
+                      </div>
+                      <span className="round-bar-pct">{winPct.toFixed(0)}%</span>
                       <span className="round-bar-count">{r.win_correct}/{r.total}</span>
                     </div>
                   )

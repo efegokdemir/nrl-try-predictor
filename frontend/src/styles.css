@@ -2101,10 +2101,6 @@ body {
     min-width: 90px;
     font-size: 0.7rem;
   }
-
-  .round-accuracy-chart {
-    overflow-x: auto;
-  }
 }
 
 /* ========================================
@@ -2742,6 +2738,35 @@ body {
   font-weight: 700;
 }
 
+/* Year picker shared by the accuracy page and the dashboard. Both pages are
+   per-season rather than career totals, so this doubles as an on-screen label
+   for the scope of the numbers beside it. The <select> itself reuses the
+   app-wide .season-select styling so it matches the dropdowns on the team and
+   player pages; only the wrapper and its label are new. */
+.season-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.season-picker-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+/* Right-aligned in the accuracy page's flex header; on its own line under the
+   dashboard's block header. */
+.accuracy-header .season-picker {
+  margin-left: auto;
+}
+
+.dashboard-header .season-picker {
+  margin-top: 0.75rem;
+}
+
 .accuracy-filters {
   display: flex;
   gap: 0.5rem;
@@ -2842,66 +2867,55 @@ body {
 /* Round accuracy chart */
 .round-accuracy-chart {
   display: flex;
-  gap: 0.5rem;
-  align-items: flex-end;
+  flex-direction: column;
+  gap: 0.3rem;
   padding: 1rem;
   background: #fff;
   border: 1px solid #e5e5e5;
   border-radius: 10px;
-  min-height: 200px;
 }
 
-.round-bar-group {
-  display: flex;
-  flex-direction: column;
+/* One row per round, stacked down the page. This used to be a row of ~29
+   vertical columns at min-width 35px each (~1000px), which overflowed every
+   normal viewport and relied on overflow-x: auto to stay usable. */
+.round-bar-row {
+  display: grid;
+  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem;
   align-items: center;
-  flex: 1;
-  min-width: 35px;
+  gap: 0.5rem;
 }
 
-.round-bar-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 120px;
-  justify-content: flex-end;
-}
-
-.round-bar-col .round-bar-track {
-  width: 24px;
-  height: 100px;
+.round-bar-row .round-bar-track {
+  height: 14px;
   background: #e5e5e5;
   border-radius: 4px;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
 }
 
-.round-bar-col .round-bar-fill {
-  width: 100%;
+.round-bar-row .round-bar-fill {
+  height: 100%;
   background: #22c55e;
   border-radius: 4px;
-  transition: height 0.5s;
+  transition: width 0.5s;
 }
 
 .round-bar-pct {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 600;
   color: #555;
-  margin-top: 0.25rem;
+  text-align: right;
 }
 
 .round-bar-label {
   font-size: 0.72rem;
   font-weight: 600;
   color: #888;
-  margin-top: 0.3rem;
 }
 
 .round-bar-count {
-  font-size: 0.65rem;
+  font-size: 0.68rem;
   color: #aaa;
+  text-align: right;
 }
 
 /* ── Odds (inline in Draw match cards) ── */

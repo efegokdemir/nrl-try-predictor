@@ -38,7 +38,7 @@ from database import (
     get_player_headshot, update_player_headshots,
     save_cache_entry, load_all_cache_entries,
     prune_old_logs,
-    get_edge_pick, save_edge_pick, get_betting_summary,
+    get_edge_pick, save_edge_pick, get_betting_summary, get_prediction_seasons,
 )
 from odds_client import (
     add_implied_odds_to_players,
@@ -58,6 +58,15 @@ logger = logging.getLogger(__name__)
 # laptop the moment the process starts. Production sets this true in
 # render.yaml. _warm_cache() is read-only and is never gated by this.
 ENABLE_SYNC_LOOPS = os.environ.get("ENABLE_SYNC_LOOPS", "false").strip().lower() in ("true", "1", "yes")
+
+# The model version actually being served, and so the one the accuracy pages
+# report on by default. The predictions table still holds model_version 1 and 2
+# rows as history (see docs/adr/0001-single-model-version.md), and aggregating
+# across all three triple-counted every round V1/V2 also ran in -- round 1 read
+# 11/24 instead of 3/8. Named rather than inlined because ADR-0006 puts a
+# challenger (4) alongside the champion in 2027, at which point the served
+# version is a thing that changes.
+CHAMPION_MODEL_VERSION = 3
 
 
 def _backfill_player_headshots(*player_lists):
@@ -1394,19 +1403,40 @@ def _theme_to_colour(theme: dict) -> str:
     return colour_map.get(key, "#333333")
 
 
+def _selectable_seasons():
+    """Seasons the year selector should offer. Always includes the current
+    one even before it has any settled predictions -- otherwise the selector
+    would drop the season you are actually in every January, leaving no way
+    back to it from a prior year."""
+    return sorted(set(get_prediction_seasons()) | {SEASON}, reverse=True)
+
+
 @app.get("/api/accuracy")
-async def get_accuracy(model_version: int = None, season: int = None):
-    """Get prediction accuracy stats."""
-    return get_accuracy_stats(model_version=model_version, season=season)
+async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int = SEASON):
+    """Get prediction accuracy stats for the served model, this season, by
+    default. Both filters matter. Without the model one, the retired V1/V2 rows
+    triple-count the rounds they ran in. Without the season one, by_round groups
+    on round_number alone, so next season round 1 would be silently averaged in
+    with this season round 1. Explicit ?model_version= / ?season= still reach
+    the history, and the by_model breakdown spans every version regardless of
+    the model filter, so nothing is hidden by defaulting these."""
+    stats = get_accuracy_stats(model_version=model_version, season=season)
+    # New dict: stats is a cached object shared with every other caller, so
+    # it must not be mutated here.
+    return {**stats, "season": season, "seasons": _selectable_seasons()}
 
 
 @app.get("/api/dashboard")
-async def get_dashboard():
+async def get_dashboard(season: int = SEASON):
     """Overview data for the home dashboard: accuracy stats plus the
-    betting-edge profit/loss simulation."""
+    betting-edge profit/loss simulation. Both are scoped to the current
+    season -- neither is a career total, and pooling seasons would blend a
+    finished season results into this one indefinitely."""
     return {
-        "accuracy": get_accuracy_stats(model_version=None, season=None),
-        "betting": get_betting_summary(),
+        "accuracy": get_accuracy_stats(model_version=CHAMPION_MODEL_VERSION, season=season),
+        "betting": get_betting_summary(season=season),
+        "season": season,
+        "seasons": _selectable_seasons(),
     }
 
 

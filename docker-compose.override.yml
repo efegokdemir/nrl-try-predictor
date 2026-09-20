@@ -2,10 +2,9 @@
 # docker-compose.yml (Compose loads *.override.yml from the same directory by
 # default — no `-f` flags needed for normal local dev).
 #
-# docker-compose.yml stays prod-shaped on purpose (see docs/migration-plan.md
-# Phase A). Everything here exists only to make local dev hot-reload instead
-# of running the built production images, and is safe to run against a
-# throwaway local Postgres.
+# docker-compose.yml stays prod-shaped on purpose. Everything here exists
+# only to make local dev hot-reload instead of running the built production
+# images, and is safe to run against a throwaway local Postgres.
 services:
   backend:
     # Bind-mount the source so edits on the host are picked up without a
@@ -19,8 +18,8 @@ services:
       # Explicit here (rather than relying on backend/main.py's own default)
       # so anyone reading the dev compose config can see local dev never
       # starts the scrape/prediction sync loops — i.e. never writes to
-      # whatever DATABASE_URL happens to be configured. Task A3 added this
-      # gate; production is the only place that sets it true.
+      # whatever DATABASE_URL happens to be configured. Production is the only
+      # place that sets it true.
       - ENABLE_SYNC_LOOPS=${ENABLE_SYNC_LOOPS:-false}
 
   frontend:
@@ -47,7 +46,7 @@ services:
     # stays reachable at http://localhost:3000 same as prod.
     command: npm run dev -- --host 0.0.0.0 --port 80
     environment:
-      # vite.config.js proxies /api to this address (task A5). The default
+      # vite.config.js proxies /api to this address. The default
       # baked into vite.config.js is http://localhost:8000, for running
       # `npm run dev` directly on the host; inside Compose the backend is
       # only reachable by its service name on the compose network.

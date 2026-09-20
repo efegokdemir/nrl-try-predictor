@@ -36,7 +36,7 @@ python scrape_job.py                         # one-shot: full historical scrape 
 
 ```
 npm install
-npm run dev        # Vite dev server, proxies /api -> http://backend:8000
+npm run dev        # Vite dev server; proxies /api -> $VITE_PROXY_TARGET (default http://localhost:8000)
 ```
 
 ### Full stack with Docker Compose (from repo root)

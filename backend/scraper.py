@@ -1,15 +1,15 @@
 """
 Historical NRL data scraper.
 Fetches match data from 2020-2026, including team lists and try scorers.
-Runs at startup and stores everything in SQLite.
+Stores everything in Postgres (see database.py).
 """
 
 import asyncio
 import httpx
 import json
 import logging
-import time
 
+from field_side import JERSEY_FIELD_SIDE
 from database import (
     init_db, get_db, is_round_scraped, mark_round_scraped,
     insert_match, bulk_insert_match_data, get_total_match_count,
@@ -138,25 +138,6 @@ async def scrape_round(client: httpx.AsyncClient, season: int, round_number: int
             await asyncio.sleep(0.3)  # Rate limit between match details
         except Exception as e:
             logger.error(f"Error fetching detail for {match_url}: {e}")
-
-
-# NRL jersey number → field side mapping
-# From the ATTACKING team's perspective
-JERSEY_FIELD_SIDE = {
-    1: "fullback",  # Fullback — own category, scores across all edges
-    2: "right",     # Right Wing
-    3: "right",     # Right Centre
-    4: "left",      # Left Centre
-    5: "left",      # Left Wing
-    6: "left",      # Five-Eighth (typically left side)
-    7: "right",     # Halfback (typically right side)
-    8: "middle",    # Prop
-    9: "middle",    # Hooker
-    10: "middle",   # Prop
-    11: "left",     # Left 2nd Row
-    12: "right",    # Right 2nd Row
-    13: "middle",   # Lock
-}
 
 
 def _determine_field_side(player_name, jersey_number, side, players_data,
@@ -292,8 +273,6 @@ async def scrape_match_detail(client: httpx.AsyncClient, match_id: int,
 
     # Parse timeline for interchange events
     timeline = data.get("timeline", [])
-    # Also collect try events from timeline for better game_seconds data
-    timeline_tries = {}  # {(side, game_seconds): player_id}
 
     for event in timeline:
         if not isinstance(event, dict):
@@ -304,7 +283,6 @@ async def scrape_match_detail(client: httpx.AsyncClient, match_id: int,
             on_id = event.get("playerId", 0)
             off_id = event.get("offPlayerId", 0)
             game_secs = event.get("gameSeconds", 0)
-            team_id = event.get("teamId", 0)
 
             on_info = player_id_map.get(on_id, {})
             off_info = player_id_map.get(off_id, {})

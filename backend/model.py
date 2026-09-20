@@ -15,24 +15,21 @@ Factors used for try and win probability:
 
 import numpy as np
 import logging
+from field_side import JERSEY_FIELD_SIDE
 from database import (
     get_position_try_rates,
-    get_player_try_history,
     get_players_try_histories_batch,
     get_team_attack_defence,
     get_h2h_record,
     get_home_away_win_rate,
-    get_total_match_count,
     get_team_tries_conceded_by_position,
     get_team_tries_conceded_by_edge,
-    get_player_recent_form,
     get_players_recent_form_batch,
     get_venue_stats,
     clear_query_cache,
     get_team_margin_weighted_form,
     get_team_rest_days,
     get_team_had_bye,
-    get_player_try_minutes_batch,
     get_bench_minutes_batch,
     get_calibration_data,
     get_quality_adjusted_tries_batch,
@@ -57,23 +54,6 @@ FALLBACK_POSITION_RATES = {
 LEAGUE_AVG_PPG = 22.0
 HOME_ADVANTAGE_WIN = 0.08  # +8% win probability at home
 HOME_ADVANTAGE_TRY = 1.06  # 6% more likely to score tries at home
-
-# Jersey number → field side (from the attacking team's perspective)
-JERSEY_FIELD_SIDE = {
-    1: "fullback",  # Fullback — own category, scores across all edges
-    2: "right",     # Right Wing
-    3: "right",     # Right Centre
-    4: "left",      # Left Centre
-    5: "left",      # Left Wing
-    6: "left",      # Five-Eighth
-    7: "right",     # Halfback
-    8: "middle",    # Prop
-    9: "middle",    # Hooker
-    10: "middle",   # Prop
-    11: "left",     # Left 2nd Row
-    12: "right",    # Right 2nd Row
-    13: "middle",   # Lock
-}
 
 # Position-specific sensitivity to edge vulnerability.
 # Weights derived from 2026 rounds 1-8 try distribution per edge:
@@ -215,9 +195,9 @@ def _predict_try_with_history(
     v3_context: dict = None,
 ) -> float:
     """Predict try probability using pre-fetched player history.
-    v3_context (optional): dict with keys bench_minutes, try_minutes, calibration,
-    rest_days, bye_week, round_number, quality_adj_rate — populated whenever the
-    caller knows the match's season/round; situational adjustments below are
+    v3_context (optional): dict with keys bench_minutes, calibration, rest_days,
+    bye_week, round_number, quality_adj_rates, margin_form — populated whenever
+    the caller knows the match's season/round; situational adjustments below are
     skipped gracefully when it's unavailable."""
     position = player.get("position", "Interchange")
     is_bench = player.get("is_interchange", False) or player.get("number", 0) >= 14
@@ -653,12 +633,9 @@ def generate_multi_suggestion(home_predictions: list, away_predictions: list,
 
     # Pick top 3 (but try to get at least 1 from each team for diversity)
     picks = []
-    teams_represented = set()
 
-    # First pass: top 3
-    top_candidates = all_players[:6]  # Consider top 6
-
-    # Get the absolute top 3 first
+    # Take the absolute top 3 first; the passes below only intervene when
+    # that lands entirely on one team.
     raw_top3 = all_players[:3]
     raw_teams = set(p["team"] for p in raw_top3)
 
@@ -816,7 +793,7 @@ def find_value_picks(predictions: list, opp_team_name: str, team_nickname: str,
         if form["streak"] >= 2:
             reasons.append(f"Try-scoring streak: {form['streak']} games in a row")
         elif form["streak"] == 1:
-            reasons.append(f"Scored last game")
+            reasons.append("Scored last game")
 
         if form["rate"] >= 0.4:
             reasons.append(f"Scoring at {form['rate']:.0%} in last {form['games']} games")

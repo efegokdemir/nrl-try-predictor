@@ -24,8 +24,6 @@ services:
     container_name: nrl-backend
     ports:
       - "8000:8000"
-    volumes:
-      - nrl-data:/app/data
     environment:
       - ODDS_API_KEY=${ODDS_API_KEY:-}
       # Host must stay the `db` service name (never `localhost`) so the DB
@@ -52,5 +50,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  nrl-data:
   nrl-db-data:

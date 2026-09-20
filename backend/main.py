@@ -7,12 +7,10 @@ import asyncio
 import threading
 from contextlib import asynccontextmanager
 
-import httpx
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, JSONResponse
+from fastapi.responses import JSONResponse
 
 from nrl_client import (
     fetch_round, fetch_match_detail, fetch_ladder,
@@ -27,13 +25,13 @@ from model import (
 from scraper import sync_current_season
 from database import (
     init_db, get_total_match_count, get_total_try_count,
-    get_player_game_log, get_db,
+    get_player_game_log,
     upsert_prediction, get_accuracy_stats, get_unrecorded_completed_matches,
     search_players, search_teams, get_all_teams, get_all_players,
     get_team_roster, get_team_recent_results, get_team_season_matches, get_season_rounds,
     get_season_round_matches,
     get_team_attack_defence, get_home_away_win_rate,
-    get_team_tries_conceded_by_edge, get_venue_stats, get_h2h_recent_tries,
+    get_team_tries_conceded_by_edge, get_h2h_recent_tries,
     prefetch_round_data,
     get_player_headshot, update_player_headshots,
     save_cache_entry, load_all_cache_entries,
@@ -346,7 +344,7 @@ PREDICTION_SYNC_INTERVAL = 600  # 10 minutes
 SCRAPE_SYNC_INTERVAL = 1800  # 30 minutes — matches the old external cron's cadence
 
 
-async def _record_prediction_for_match(match_url: str, model_version: int = 3):
+async def _record_prediction_for_match(match_url: str, model_version: int = CHAMPION_MODEL_VERSION):
     """Fetch a completed match from the NRL API, run predictions, and record accuracy."""
 
     raw = await fetch_match_detail(match_url)
@@ -459,7 +457,7 @@ async def _record_prediction_for_match(match_url: str, model_version: int = 3):
 
 async def _backfill_predictions():
     """Record predictions for all completed matches that haven't been recorded yet."""
-    unrecorded = get_unrecorded_completed_matches(model_version=3)
+    unrecorded = get_unrecorded_completed_matches(model_version=CHAMPION_MODEL_VERSION)
     if not unrecorded:
         return
     logger.info(f"Backfilling {len(unrecorded)} prediction(s)...")
@@ -596,21 +594,6 @@ async def health_check():
     return {"status": "ok"}
 
 
-@app.get("/api/debug/bye-check")
-async def debug_bye_check():
-    """Temporary: check Titans bye data."""
-    conn = get_db()
-    matches = conn.execute("""
-        SELECT season, round_number, home_team, away_team, match_state
-        FROM matches
-        WHERE (home_team LIKE '%Titan%' OR away_team LIKE '%Titan%')
-          AND season = 2026
-        ORDER BY round_number
-    """).fetchall()
-    conn.close()
-    return [dict(r) for r in matches]
-
-
 @app.get("/api/status")
 async def get_status():
     """Return DB status - how much historical data is loaded."""
@@ -618,33 +601,6 @@ async def get_status():
         "matches": get_total_match_count(),
         "tries": get_total_try_count(),
     }
-
-
-@app.get("/api/img")
-async def proxy_image(url: str):
-    """Proxy external images to avoid hotlink blocking."""
-    if not url.startswith("https://"):
-        raise HTTPException(status_code=400, detail="Invalid URL")
-    try:
-        async with httpx.AsyncClient(
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
-            },
-            timeout=10.0, follow_redirects=True
-        ) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                raise HTTPException(status_code=404)
-            content_type = resp.headers.get("content-type", "image/png")
-            return Response(
-                content=resp.content,
-                media_type=content_type,
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-    except (httpx.HTTPError, Exception):
-        raise HTTPException(status_code=502, detail="Failed to fetch image")
-
 
 
 async def _is_round_drawn(round_number: int):
@@ -772,6 +728,35 @@ async def get_rounds(season: int = SEASON):
     return result
 
 
+def _build_odds_comparison(home_odds_str, away_odds_str, home_model_prob, away_model_prob):
+    """Calculate implied probabilities from decimal odds and compare to model.
+    Shared by the round-fixture pass and the match-detail response so both
+    report edges on identical arithmetic."""
+    if not home_odds_str or not away_odds_str:
+        return None
+    try:
+        home_dec = float(home_odds_str)
+        away_dec = float(away_odds_str)
+        if home_dec <= 0 or away_dec <= 0:
+            return None
+        home_implied = 1.0 / home_dec
+        away_implied = 1.0 / away_dec
+        return {
+            "home_decimal": home_dec,
+            "away_decimal": away_dec,
+            "home_implied_prob": round(home_implied, 4),
+            "away_implied_prob": round(away_implied, 4),
+            "home_model_prob": round(home_model_prob, 4),
+            "away_model_prob": round(away_model_prob, 4),
+            "home_value": home_model_prob > home_implied,
+            "away_value": away_model_prob > away_implied,
+            "home_edge": round(home_model_prob - home_implied, 4),
+            "away_edge": round(away_model_prob - away_implied, 4),
+        }
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
 def _predict_single_fixture(f, round_number):
     """Predict win probability for a single fixture (runs in its own thread)."""
     home = f.get("home_team", "")
@@ -786,28 +771,12 @@ def _predict_single_fixture(f, round_number):
     f["away_win_prob"] = wp["away_win_prob"]
     f["predicted_home_score"] = wp["predicted_home_score"]
     f["predicted_away_score"] = wp["predicted_away_score"]
-    home_odds_str = f.get("home_odds", "")
-    away_odds_str = f.get("away_odds", "")
-    if home_odds_str and away_odds_str:
-        try:
-            home_dec = float(home_odds_str)
-            away_dec = float(away_odds_str)
-            if home_dec > 0 and away_dec > 0:
-                home_implied = 1.0 / home_dec
-                away_implied = 1.0 / away_dec
-                f["odds_comparison"] = {
-                    "home_decimal": home_dec, "away_decimal": away_dec,
-                    "home_implied_prob": round(home_implied, 4),
-                    "away_implied_prob": round(away_implied, 4),
-                    "home_model_prob": round(wp["home_win_prob"], 4),
-                    "away_model_prob": round(wp["away_win_prob"], 4),
-                    "home_value": wp["home_win_prob"] > home_implied,
-                    "away_value": wp["away_win_prob"] > away_implied,
-                    "home_edge": round(wp["home_win_prob"] - home_implied, 4),
-                    "away_edge": round(wp["away_win_prob"] - away_implied, 4),
-                }
-        except (ValueError, ZeroDivisionError):
-            pass
+    odds_comparison = _build_odds_comparison(
+        f.get("home_odds", ""), f.get("away_odds", ""),
+        wp["home_win_prob"], wp["away_win_prob"],
+    )
+    if odds_comparison:
+        f["odds_comparison"] = odds_comparison
     state = (f.get("match_state") or "").lower()
     if state in ("fulltime", "postmatch") and f.get("home_score") is not None and f.get("away_score") is not None:
         if f["home_score"] > f["away_score"]:
@@ -1333,7 +1302,7 @@ def _compute_match_detail(url, raw, home_players, away_players,
             m_json = json.dumps([{"name": p["name"], "team": p["team"], "scored": p.get("scored")} for p in multi["picks"]])
             upsert_prediction(
                 match_url=url, season=before_season, round_number=before_round,
-                model_version=3, home_team=home_nickname, away_team=away_nickname,
+                model_version=CHAMPION_MODEL_VERSION, home_team=home_nickname, away_team=away_nickname,
                 predicted_winner=win_prediction["predicted_winner"],
                 home_win_prob=win_prediction["home_win_prob"],
                 predicted_home_score=win_prediction["predicted_home_score"],
@@ -1498,46 +1467,22 @@ async def get_match_by_url(url: str, version: int = 3):
     return await _refresh_match_cache(url)
 
 
-def _build_odds_comparison(home_odds_str, away_odds_str, home_model_prob, away_model_prob):
-    """Calculate implied probabilities from decimal odds and compare to model."""
-    if not home_odds_str or not away_odds_str:
-        return None
-    try:
-        home_dec = float(home_odds_str)
-        away_dec = float(away_odds_str)
-        if home_dec <= 0 or away_dec <= 0:
-            return None
-        home_implied = 1.0 / home_dec
-        away_implied = 1.0 / away_dec
-        return {
-            "home_decimal": home_dec,
-            "away_decimal": away_dec,
-            "home_implied_prob": round(home_implied, 4),
-            "away_implied_prob": round(away_implied, 4),
-            "home_model_prob": round(home_model_prob, 4),
-            "away_model_prob": round(away_model_prob, 4),
-            "home_value": home_model_prob > home_implied,
-            "away_value": away_model_prob > away_implied,
-            "home_edge": round(home_model_prob - home_implied, 4),
-            "away_edge": round(away_model_prob - away_implied, 4),
-        }
-    except (ValueError, ZeroDivisionError):
-        return None
+# Theme key -> primary club colour, used for the badge fallback swatch.
+# Mirrors frontend/src/components/MatchCard.jsx's TEAM_COLOURS.
+_TEAM_COLOURS = {
+    "broncos": "#6D2735", "raiders": "#56B947", "bulldogs": "#005DB5",
+    "sharks": "#00A5DB", "titans": "#E8B825", "sea-eagles": "#6D2735",
+    "storm": "#552D6D", "knights": "#005DB5", "cowboys": "#002B5C",
+    "eels": "#005DB5", "panthers": "#2A2A2A", "rabbitohs": "#003B2F",
+    "dragons": "#E2231A", "roosters": "#003B7B", "warriors": "#636466",
+    "wests-tigers": "#F47920", "dolphins": "#C8102E",
+}
 
 
 def _theme_to_colour(theme: dict) -> str:
     if not isinstance(theme, dict):
         return "#333333"
-    key = theme.get("key", "")
-    colour_map = {
-        "broncos": "#6D2735", "raiders": "#56B947", "bulldogs": "#005DB5",
-        "sharks": "#00A5DB", "titans": "#E8B825", "sea-eagles": "#6D2735",
-        "storm": "#552D6D", "knights": "#005DB5", "cowboys": "#002B5C",
-        "eels": "#005DB5", "panthers": "#2A2A2A", "rabbitohs": "#003B2F",
-        "dragons": "#E2231A", "roosters": "#003B7B", "warriors": "#636466",
-        "wests-tigers": "#F47920", "dolphins": "#C8102E",
-    }
-    return colour_map.get(key, "#333333")
+    return _TEAM_COLOURS.get(theme.get("key", ""), "#333333")
 
 
 def _selectable_seasons():
@@ -1626,28 +1571,17 @@ async def get_team(name: str, season: int = SEASON):
     if name not in all_teams:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    from model import generate_team_summary as _gen_summary
-
     form = get_team_attack_defence(name, last_n_games=10)
     ha = get_home_away_win_rate(name)
     edge_vuln = get_team_tries_conceded_by_edge(name, last_n_games=15)
     roster = get_team_roster(name, season=season)
     recent = get_team_recent_results(name, last_n=10)
-    summary = _gen_summary(name)
+    summary = generate_team_summary(name)
 
     # Form string (W/L/D for last 10)
     form_str = [r["result"] for r in recent]
 
-    # Find theme key from colour map
-    theme_map = {
-        "Broncos": "broncos", "Raiders": "raiders", "Bulldogs": "bulldogs",
-        "Sharks": "sharks", "Titans": "titans", "Sea Eagles": "sea-eagles",
-        "Storm": "storm", "Knights": "knights", "Cowboys": "cowboys",
-        "Eels": "eels", "Panthers": "panthers", "Rabbitohs": "rabbitohs",
-        "Dragons": "dragons", "Roosters": "roosters", "Warriors": "warriors",
-        "Wests Tigers": "wests-tigers", "Dolphins": "dolphins",
-    }
-    theme_key = theme_map.get(name, "nrl")
+    theme_key = _TEAM_THEME_MAP.get(name, "nrl")
 
     return {
         "name": name,
@@ -1736,16 +1670,3 @@ async def list_players(season: int = None):
     """List every player. Pass `season` to scope players/position/totals to
     that season only; omitted, totals are career-wide."""
     return get_all_players(season=season)
-
-
-# Serve frontend
-static_dir = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(static_dir):
-    app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
-
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        file_path = os.path.join(static_dir, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(os.path.join(static_dir, "index.html"))

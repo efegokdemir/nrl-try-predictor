@@ -1,5 +1,5 @@
 """
-Standalone scraper job for GitHub Actions cron.
+Standalone scraper job, run by the manual .github/workflows/scrape.yml dispatch.
 Syncs current season data and backfills any new matches.
 """
 

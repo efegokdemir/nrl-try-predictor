@@ -10,8 +10,6 @@ import atexit
 import time
 import threading
 
-import decimal
-
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
@@ -88,7 +86,6 @@ def _cached_query(func_name, ttl=CACHE_TTL, stale_while_revalidate=False):
 
 def clear_query_cache():
     """Clear all cached query results (call after scraping)."""
-    global _query_cache
     with _cache_lock:
         _query_cache.clear()
         # A refresh still in flight would otherwise repopulate a key from a
@@ -462,15 +459,6 @@ def is_round_scraped(season: int, round_number: int) -> bool:
     return bool(row and row["completed"])
 
 
-def reset_scrape_progress():
-    """Clear all scrape progress to force a full re-scrape."""
-    conn = get_db()
-    conn.execute("DELETE FROM scrape_progress")
-    conn.commit()
-    conn.close()
-    logger.info("Scrape progress reset — full re-scrape will occur on next startup")
-
-
 def repair_scrape_progress(season: int) -> list:
     """Clear any scrape_progress rows wrongly marked complete for a round
     that has zero actual matches recorded. NRL echoes the last real round's
@@ -542,28 +530,6 @@ def insert_match(season, round_number, round_title, match_url, match_state,
         conn.close()
 
 
-def insert_player(match_id, team, side, name, jersey_number, position, is_interchange, headshot=""):
-    conn = get_db()
-    conn.execute(
-        """INSERT INTO players (match_id, team, side, name, jersey_number, position, is_interchange, headshot)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-        (match_id, team, side, name, jersey_number, position, int(is_interchange), headshot or "")
-    )
-    conn.commit()
-    conn.close()
-
-
-def insert_try(match_id, team, side, player_name, minute):
-    conn = get_db()
-    conn.execute(
-        """INSERT INTO tries (match_id, team, side, player_name, minute)
-           VALUES (%s, %s, %s, %s, %s)""",
-        (match_id, team, side, player_name, minute)
-    )
-    conn.commit()
-    conn.close()
-
-
 def bulk_insert_match_data(match_id, players_data, tries_data, interchanges_data=None):
     """Insert all players, tries, and interchanges for a match in one transaction.
     Clears existing data first to avoid duplicates on re-scrape."""
@@ -612,26 +578,6 @@ def _temporal_filter(alias="m", before_season=None, before_round=None):
         f" AND ({alias}.season < %s OR ({alias}.season = %s AND {alias}.round_number < %s))",
         [before_season, before_season, before_round or 1],
     )
-
-
-@_cached_query("player_try_history")
-def get_player_try_history(player_name: str, before_season=None, before_round=None) -> list:
-    """Get all matches where a player was listed and whether they scored."""
-    tf, tp = _temporal_filter("m", before_season, before_round)
-    conn = get_db()
-    rows = conn.execute(f"""
-        SELECT p.name, p.position, p.team, p.side, p.jersey_number,
-               m.season, m.round_number, m.home_team, m.away_team,
-               m.home_score, m.away_score,
-               (SELECT COUNT(*) FROM tries t
-                WHERE t.match_id = m.id AND t.player_name = p.name AND t.side = p.side) as tries_scored
-        FROM players p
-        JOIN matches m ON p.match_id = m.id
-        WHERE p.name = %s AND m.match_state = 'FullTime'{tf}
-        ORDER BY m.season, m.round_number
-    """, (player_name, *tp)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
 
 
 def get_players_try_histories_batch(player_names: list, before_season=None, before_round=None) -> dict:
@@ -1252,7 +1198,6 @@ def get_team_tries_conceded_by_position(team_name: str, last_n_games: int = 15, 
     games = rows[0]["games"] if rows else 0
     league_rates = get_position_try_rates()
 
-    from collections import Counter
     result = {}
     for r in rows:
         pos = r["position"]
@@ -1340,48 +1285,6 @@ def get_team_tries_conceded_by_edge(team_name: str, last_n_games: int = 15, befo
     return result
 
 
-@_cached_query("player_recent_form")
-def get_player_recent_form(player_name: str, last_n_games: int = 5, before_season=None, before_round=None) -> dict:
-    """
-    Get a player's recent try-scoring form.
-    Returns: {games: N, tries: N, rate: float, streak: int (consecutive games scoring)}
-    """
-    tf, tp = _temporal_filter("m", before_season, before_round)
-    conn = get_db()
-    rows = conn.execute(f"""
-        SELECT m.season, m.round_number,
-               (SELECT COUNT(*) FROM tries t
-                WHERE t.match_id = m.id AND t.player_name = p.name AND t.side = p.side) as tries_scored
-        FROM players p
-        JOIN matches m ON p.match_id = m.id
-        WHERE p.name = %s AND m.match_state = 'FullTime'{tf}
-        ORDER BY m.season DESC, m.round_number DESC
-        LIMIT %s
-    """, (player_name, *tp, last_n_games)).fetchall()
-    conn.close()
-
-    if not rows:
-        return {"games": 0, "tries": 0, "rate": 0, "streak": 0}
-
-    games = len(rows)
-    tries = sum(r["tries_scored"] for r in rows)
-
-    # Calculate current scoring streak (consecutive games with a try, most recent first)
-    streak = 0
-    for r in rows:
-        if r["tries_scored"] > 0:
-            streak += 1
-        else:
-            break
-
-    return {
-        "games": games,
-        "tries": tries,
-        "rate": round(tries / games, 3) if games > 0 else 0,
-        "streak": streak,
-    }
-
-
 def get_player_game_log(player_name: str) -> list:
     """
     Get full game log for a player: every match they played, their team,
@@ -1434,45 +1337,6 @@ def get_player_game_log(player_name: str) -> list:
     return games
 
 
-def unmark_round(season: int, round_number: int):
-    """Mark a round as not scraped so it gets re-scraped."""
-    conn = get_db()
-    conn.execute(
-        "DELETE FROM scrape_progress WHERE season=%s AND round_number=%s",
-        (season, round_number)
-    )
-    conn.commit()
-    conn.close()
-
-
-def delete_match_data(match_url: str):
-    """Delete a match and its associated players/tries so it can be re-inserted."""
-    conn = get_db()
-    row = conn.execute("SELECT id FROM matches WHERE match_url=%s", (match_url,)).fetchone()
-    if row:
-        mid = row["id"]
-        conn.execute("DELETE FROM tries WHERE match_id=%s", (mid,))
-        conn.execute("DELETE FROM players WHERE match_id=%s", (mid,))
-        conn.execute("DELETE FROM interchanges WHERE match_id=%s", (mid,))
-        conn.execute("DELETE FROM matches WHERE id=%s", (mid,))
-        conn.commit()
-    conn.close()
-
-
-def get_incomplete_match_urls_for_round(season: int, round_number: int) -> list:
-    """
-    Get match URLs from a round that we DON'T have as completed yet.
-    Used to find games that have finished since we last checked.
-    """
-    conn = get_db()
-    rows = conn.execute("""
-        SELECT match_url FROM matches
-        WHERE season=%s AND round_number=%s
-    """, (season, round_number)).fetchall()
-    conn.close()
-    return [r["match_url"] for r in rows]
-
-
 @_cached_query("total_match_count", ttl=60)
 def get_total_match_count() -> int:
     conn = get_db()
@@ -1487,98 +1351,6 @@ def get_total_try_count() -> int:
     row = conn.execute("SELECT COUNT(*) as cnt FROM tries").fetchone()
     conn.close()
     return row["cnt"]
-
-
-def get_team_scoring_breakdown(team_name: str, last_n_games: int = 10, before_season=None, before_round=None) -> dict:
-    """
-    Get a team's scoring breakdown: tries scored, tries conceded,
-    and kicking points (conversions + penalties + field goals) per game.
-
-    Derives kicking points from: total_score - (tries x 4).
-    """
-    tf, tp = _temporal_filter("matches", before_season, before_round)
-    conn = get_db()
-
-    match_rows = conn.execute(f"""
-        SELECT id, home_team, away_team, home_score, away_score
-        FROM matches
-        WHERE (home_team = %s OR away_team = %s)
-          AND match_state = 'FullTime'
-          AND home_score IS NOT NULL{tf}
-        ORDER BY season DESC, round_number DESC
-        LIMIT %s
-    """, (team_name, team_name, *tp, last_n_games)).fetchall()
-
-    if not match_rows:
-        conn.close()
-        return {
-            "games": 0,
-            "tries_scored_pg": 3.5, "tries_conceded_pg": 3.5,
-            "kick_pts_scored_pg": 8.0, "kick_pts_conceded_pg": 8.0,
-            "conversion_rate": 0.75,
-        }
-
-    total_tries_scored = 0
-    total_tries_conceded = 0
-    total_kick_pts_scored = 0
-    total_kick_pts_conceded = 0
-    recent_tries_scored = 0
-    recent_tries_conceded = 0
-    recent_kick_pts_scored = 0
-    recent_kick_pts_conceded = 0
-    games = len(match_rows)
-    recent_n = min(5, games)
-
-    for i, mr in enumerate(match_rows):
-        is_home = mr["home_team"] == team_name
-        scoring_side = "home" if is_home else "away"
-        conceding_side = "away" if is_home else "home"
-        team_score = mr["home_score"] if is_home else mr["away_score"]
-        opp_score = mr["away_score"] if is_home else mr["home_score"]
-
-        tries_for = conn.execute(
-            "SELECT COUNT(*) as cnt FROM tries WHERE match_id = %s AND side = %s",
-            (mr["id"], scoring_side)
-        ).fetchone()["cnt"]
-
-        tries_against = conn.execute(
-            "SELECT COUNT(*) as cnt FROM tries WHERE match_id = %s AND side = %s",
-            (mr["id"], conceding_side)
-        ).fetchone()["cnt"]
-
-        kick_pts_for = max(0, team_score - tries_for * 4)
-        kick_pts_against = max(0, opp_score - tries_against * 4)
-
-        total_tries_scored += tries_for
-        total_tries_conceded += tries_against
-        total_kick_pts_scored += kick_pts_for
-        total_kick_pts_conceded += kick_pts_against
-
-        if i < recent_n:
-            recent_tries_scored += tries_for
-            recent_tries_conceded += tries_against
-            recent_kick_pts_scored += kick_pts_for
-            recent_kick_pts_conceded += kick_pts_against
-
-    conn.close()
-
-    # Conversion rate estimate: kick_pts / (tries * 2) — capped at 1.0
-    total_max_conv = total_tries_scored * 2 if total_tries_scored > 0 else 1
-    conv_rate = min(total_kick_pts_scored / total_max_conv, 1.0)
-
-    return {
-        "games": games,
-        "tries_scored_pg": total_tries_scored / games,
-        "tries_conceded_pg": total_tries_conceded / games,
-        "kick_pts_scored_pg": total_kick_pts_scored / games,
-        "kick_pts_conceded_pg": total_kick_pts_conceded / games,
-        "conversion_rate": round(conv_rate, 3),
-        # Recent window (last 5)
-        "tries_scored_pg_recent": recent_tries_scored / recent_n if recent_n > 0 else 3.5,
-        "tries_conceded_pg_recent": recent_tries_conceded / recent_n if recent_n > 0 else 3.5,
-        "kick_pts_scored_pg_recent": recent_kick_pts_scored / recent_n if recent_n > 0 else 8.0,
-        "kick_pts_conceded_pg_recent": recent_kick_pts_conceded / recent_n if recent_n > 0 else 8.0,
-    }
 
 
 # ---- Prediction tracking ----
@@ -2058,113 +1830,6 @@ def get_team_had_bye(team_name: str, season: int, round_number: int) -> bool:
     return row is None
 
 
-@_cached_query("player_try_minutes")
-def get_player_try_minute_profile(player_name: str, before_season=None, before_round=None) -> dict:
-    """Get a player's try-scoring distribution by match period (first/second half)."""
-    tf, tp = _temporal_filter("m", before_season, before_round)
-    conn = get_db()
-    rows = conn.execute(f"""
-        SELECT t.minute
-        FROM tries t
-        JOIN matches m ON m.id = t.match_id
-        WHERE t.player_name = %s AND m.match_state = 'FullTime'{tf}
-    """, (player_name, *tp)).fetchall()
-    conn.close()
-
-    if not rows:
-        return {"total": 0, "first_half": 0, "second_half": 0, "first_half_rate": 0.5}
-
-    first_half = 0
-    second_half = 0
-    for r in rows:
-        try:
-            minute = int(str(r["minute"]).replace("'", "").strip())
-            if minute <= 40:
-                first_half += 1
-            else:
-                second_half += 1
-        except (ValueError, TypeError):
-            second_half += 1  # default to second half if unparseable
-
-    total = first_half + second_half
-    return {
-        "total": total,
-        "first_half": first_half,
-        "second_half": second_half,
-        "first_half_rate": round(first_half / total, 3) if total > 0 else 0.5,
-    }
-
-
-def get_player_try_minutes_batch(player_names: list, before_season=None, before_round=None) -> dict:
-    """Batch version of get_player_try_minute_profile."""
-    if not player_names:
-        return {}
-    tf, tp = _temporal_filter("m", before_season, before_round)
-    conn = get_db()
-    placeholders = ", ".join(["%s"] * len(player_names))
-    rows = conn.execute(f"""
-        SELECT t.player_name, t.minute
-        FROM tries t
-        JOIN matches m ON m.id = t.match_id
-        WHERE t.player_name IN ({placeholders}) AND m.match_state = 'FullTime'{tf}
-    """, (*player_names, *tp)).fetchall()
-    conn.close()
-
-    profiles = {}
-    for r in rows:
-        name = r["player_name"]
-        if name not in profiles:
-            profiles[name] = {"first_half": 0, "second_half": 0}
-        try:
-            minute = int(str(r["minute"]).replace("'", "").strip())
-            if minute <= 40:
-                profiles[name]["first_half"] += 1
-            else:
-                profiles[name]["second_half"] += 1
-        except (ValueError, TypeError):
-            profiles[name]["second_half"] += 1
-
-    result = {}
-    for name in player_names:
-        p = profiles.get(name, {"first_half": 0, "second_half": 0})
-        total = p["first_half"] + p["second_half"]
-        result[name] = {
-            "total": total,
-            "first_half": p["first_half"],
-            "second_half": p["second_half"],
-            "first_half_rate": round(p["first_half"] / total, 3) if total > 0 else 0.5,
-        }
-    return result
-
-
-@_cached_query("player_avg_interchange_minutes")
-def get_player_avg_minutes(player_name: str, before_season=None, before_round=None) -> float:
-    """Estimate average minutes played for a bench player from interchange data.
-    Returns estimated minutes (0-80). Returns 80 for starters, ~30 for unknown bench."""
-    tf, tp = _temporal_filter("m", before_season, before_round)
-    conn = get_db()
-    # Find games where this player came on as interchange
-    rows = conn.execute(f"""
-        SELECT i.game_seconds
-        FROM interchanges i
-        JOIN matches m ON m.id = i.match_id
-        WHERE i.player_on = %s AND m.match_state = 'FullTime'{tf}
-        ORDER BY m.season DESC, m.round_number DESC
-        LIMIT 10
-    """, (player_name, *tp)).fetchall()
-    conn.close()
-
-    if not rows:
-        return 30.0  # Default for unknown bench players
-
-    # Average entry time in minutes, then estimate minutes played = 80 - entry_time
-    entry_minutes = [r["game_seconds"] / 60.0 for r in rows if r["game_seconds"] is not None]
-    if not entry_minutes:
-        return 30.0
-    avg_entry = sum(entry_minutes) / len(entry_minutes)
-    return round(max(5, 80.0 - avg_entry), 1)
-
-
 def get_bench_minutes_batch(player_names: list, before_season=None, before_round=None) -> dict:
     """Batch version: get estimated minutes for bench players."""
     if not player_names:
@@ -2255,48 +1920,8 @@ def get_calibration_data() -> dict:
     return calibration
 
 
-@_cached_query("opponent_quality_tries")
-def get_player_quality_adjusted_tries(player_name: str, before_season=None, before_round=None) -> float:
-    """Get a player's try rate adjusted for opponent defensive quality.
-    Tries against weak defences are discounted, tries against strong defences are boosted."""
-    tf, tp = _temporal_filter("m", before_season, before_round)
-    conn = get_db()
-    # Get all matches this player appeared in with their try counts and opponent
-    rows = conn.execute(f"""
-        SELECT p.match_id, p.side,
-               m.home_team, m.away_team, m.home_score, m.away_score,
-               (SELECT COUNT(*) FROM tries t WHERE t.match_id = p.match_id AND t.player_name = p.name) as tries_scored
-        FROM players p
-        JOIN matches m ON m.id = p.match_id
-        WHERE p.name = %s AND m.match_state = 'FullTime'{tf}
-        ORDER BY m.season DESC, m.round_number DESC
-        LIMIT 20
-    """, (player_name, *tp)).fetchall()
-    conn.close()
-
-    if len(rows) < 3:
-        return -1.0  # Not enough data
-
-    # Calculate league average conceding
-    total_weighted_rate = 0
-    total_weight = 0
-    for r in rows:
-        opponent = r["away_team"] if r["side"] == "home" else r["home_team"]
-        # Opponent's points conceded in this match as a proxy for defensive quality
-        opp_conceded = r["home_score"] if r["side"] == "away" else r["away_score"]
-        # Weight: strong defence (low conceding) → weight > 1, weak defence → weight < 1
-        defence_quality = max(0.5, min(22.0 / max(opp_conceded, 4), 2.0))
-        tries = r["tries_scored"] or 0
-        total_weighted_rate += tries * defence_quality
-        total_weight += defence_quality
-
-    if total_weight == 0:
-        return -1.0
-    return round(total_weighted_rate / total_weight, 3)
-
-
 def get_quality_adjusted_tries_batch(player_names: list, before_season=None, before_round=None) -> dict:
-    """Batch version of get_player_quality_adjusted_tries.
+    """Fetch every named player's opponent-quality-adjusted try rate in one query.
     Returns {player_name: quality_adjusted_rate} for all players with enough data."""
     if not player_names:
         return {}
@@ -2338,71 +1963,6 @@ def get_quality_adjusted_tries_batch(player_names: list, before_season=None, bef
         if total_weight > 0:
             result[name] = round(total_weighted_rate / total_weight, 3)
     return result
-
-
-def get_weather_scoring_impact() -> dict:
-    """Get average tries per game under different weather/ground conditions vs overall."""
-    conn = get_db()
-
-    # Overall average tries per game
-    overall = conn.execute("""
-        SELECT COUNT(DISTINCT m.id) as games,
-               COUNT(t.id) as tries
-        FROM matches m
-        LEFT JOIN tries t ON t.match_id = m.id
-        WHERE m.match_state = 'FullTime'
-    """).fetchone()
-    overall_tpg = (overall["tries"] / (overall["games"] * 2)) if overall["games"] > 0 else 3.5
-
-    # By weather condition
-    weather_rows = conn.execute("""
-        SELECT m.weather,
-               COUNT(DISTINCT m.id) as games,
-               COUNT(t.id) as tries
-        FROM matches m
-        LEFT JOIN tries t ON t.match_id = m.id
-        WHERE m.match_state = 'FullTime' AND m.weather != '' AND m.weather IS NOT NULL
-        GROUP BY m.weather
-    """).fetchall()
-
-    # By ground condition
-    ground_rows = conn.execute("""
-        SELECT m.ground_conditions,
-               COUNT(DISTINCT m.id) as games,
-               COUNT(t.id) as tries
-        FROM matches m
-        LEFT JOIN tries t ON t.match_id = m.id
-        WHERE m.match_state = 'FullTime' AND m.ground_conditions != '' AND m.ground_conditions IS NOT NULL
-        GROUP BY m.ground_conditions
-    """).fetchall()
-
-    conn.close()
-
-    weather = {}
-    for r in weather_rows:
-        if r["games"] >= 3:
-            tpg = r["tries"] / (r["games"] * 2) if r["games"] > 0 else overall_tpg
-            weather[r["weather"]] = {
-                "games": r["games"],
-                "tries_per_game": round(tpg, 2),
-                "vs_average": round(tpg / overall_tpg, 3) if overall_tpg > 0 else 1.0,
-            }
-
-    ground = {}
-    for r in ground_rows:
-        if r["games"] >= 3:
-            tpg = r["tries"] / (r["games"] * 2) if r["games"] > 0 else overall_tpg
-            ground[r["ground_conditions"]] = {
-                "games": r["games"],
-                "tries_per_game": round(tpg, 2),
-                "vs_average": round(tpg / overall_tpg, 3) if overall_tpg > 0 else 1.0,
-            }
-
-    return {
-        "overall_tries_per_game": round(overall_tpg, 2),
-        "by_weather": weather,
-        "by_ground": ground,
-    }
 
 
 # ---- Search ----
@@ -2775,15 +2335,6 @@ def load_all_cache_entries() -> list:
         {"key": r["key"], "payload": r["payload"], "refreshed_at": float(r["refreshed_at"])}
         for r in rows
     ]
-
-
-def delete_cache_entry(key: str) -> None:
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM cache_store WHERE key=%s", (key,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 # --- Application log mirror (see log_handler.SupabaseLogHandler) ---

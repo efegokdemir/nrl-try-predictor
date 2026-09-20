@@ -6,16 +6,6 @@ export default function PlayerCard({ player, rank, teamColor, actualTries, isCom
   const [expanded, setExpanded] = useState(false)
   const navigate = useNavigate()
 
-  const getBarColor = (pct) => {
-    if (pct >= 30) return '#22c55e'
-    if (pct >= 20) return '#84cc16'
-    if (pct >= 15) return '#eab308'
-    if (pct >= 10) return '#f97316'
-    return '#94a3b8'
-  }
-
-  const barColor = getBarColor(player.try_percentage)
-
   // Check if this player actually scored in completed matches
   const didScore = isCompleted && actualTries
     ? actualTries.some(t => t.player === player.name)

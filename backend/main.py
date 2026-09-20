@@ -230,16 +230,57 @@ def _restore_cache_from_db():
     logger.info(f"Restored {rounds} round and {matches} match cache entries from DB.")
 
 
+def _likely_current_round():
+    """Highest round already known to have fixtures, taken from the cache
+    restored at startup. Only used to decide what to warm first -- if it is
+    absent or wrong, the normal walk still warms everything, just later."""
+    with _round_cache_lock:
+        candidates = [
+            rnd for rnd, (resp, _) in _round_cache.items()
+            if resp.get("matches") and not resp.get("draw_not_released")
+        ]
+    return max(candidates) if candidates else None
+
+
 async def _warm_cache():
     """Pre-load the cache for all rounds that have data so every page loads instantly."""
     try:
         await asyncio.sleep(2)
+
+        # Warm the round people actually land on before backfilling the rest.
+        # The full walk below takes minutes -- a fetch and a pause per round,
+        # then the match details last of all -- so warming in round order left
+        # the most-visited page cold for the longest after every deploy. That
+        # window was wide enough to measure: a current-round match read 7.7s
+        # nine minutes after a deploy, then 0.2s once the walk caught up.
+        #
+        # The round number comes from the cache restored a moment ago rather
+        # than from walking to find it, since walking is the slow thing being
+        # avoided. On a first-ever boot there is nothing restored and this is
+        # simply skipped.
+        priority = _likely_current_round()
+        priority_result = None
+        if priority:
+            try:
+                priority_result = await _refresh_round_cache(priority)
+                if priority_result and priority_result.get("matches"):
+                    logger.info(f"Priority-warmed round {priority} ahead of the full walk.")
+                    if ENABLE_SYNC_LOOPS:
+                        await _warm_round_matches(priority, priority_result)
+                else:
+                    priority_result = None
+            except Exception as e:
+                logger.warning(f"Priority warm of round {priority} failed: {e}")
+                priority_result = None
+
         logger.info("Warming cache for all rounds...")
 
         latest = None
         for r in range(1, TOTAL_ROUNDS + 1):
             try:
-                result = await _refresh_round_cache(r)
+                # Already done above, and re-running it would repeat the
+                # per-fixture prediction pass for no benefit.
+                result = priority_result if r == priority and priority_result else await _refresh_round_cache(r)
                 if result is None:
                     logger.info(f"Round {r} unavailable, stopping warmup.")
                     break
@@ -266,7 +307,9 @@ async def _warm_cache():
         # edge picks. Ungated, a laptop pointed at a production DATABASE_URL
         # would write to production at startup, which is exactly what
         # ENABLE_SYNC_LOOPS exists to prevent.
-        if latest and ENABLE_SYNC_LOOPS:
+        # Only if the walk found a later round than the priority guess --
+        # otherwise its matches are already warm from above.
+        if latest and ENABLE_SYNC_LOOPS and latest[0] != priority:
             await _warm_round_matches(*latest)
     except asyncio.CancelledError:
         pass

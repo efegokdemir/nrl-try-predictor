@@ -537,7 +537,18 @@ async def _is_round_drawn(round_number: int):
     _refresh_round_cache would store). A round that turns out drawn but
     wasn't cached is reported here without being cached — the full version
     is computed the normal way, whenever it's actually visited.
+    A round that has been confirmed drawn and has finished being played
+    is recorded in _round_drawn_verified and trusted from then on: neither
+    half of that verdict can change, so re-verifying it against NRL is
+    pure cost. Without this, /api/rounds re-fetched every past round of
+    the season on every call whose _round_cache entry had aged past the
+    30-minute completed-round TTL -- ~29 sequential NRL fetches, ~11s.
     Returns (is_drawn, round_title)."""
+    with _round_cache_lock:
+        verified = _round_drawn_verified.get(round_number, _MISSING)
+    if verified is not _MISSING:
+        return (True, verified)
+
     with _round_cache_lock:
         cached = _round_cache.get(round_number)
     if cached:
@@ -566,7 +577,46 @@ async def _is_round_drawn(round_number: int):
             _round_cache[round_number] = (response, time.time())
         return (False, None)
 
+    # Genuinely drawn (echo check above says so). If it has also finished
+    # being played, both halves of the verdict are now immutable, so record
+    # it and stop re-checking it against NRL. Only stamped on this path --
+    # never from a _round_cache hit -- because only here has the round been
+    # affirmatively echo-checked; trusting a restored cache_store entry
+    # would make permanent exactly the stale-verdict bug the TTL guards.
+    all_played = bool(fixtures) and all(
+        (f.get("match_state") or "").lower() in ("fulltime", "postmatch")
+        for f in fixtures
+    )
+    if all_played:
+        with _round_cache_lock:
+            _round_drawn_verified[round_number] = round_title
     return (True, round_title)
+
+
+_ROUND_VERDICT_WARM_CONCURRENCY = 6
+
+
+async def _warm_round_verdicts():
+    """Resolve the drawn/undrawn verdict for every round of the current season
+    concurrently. get_rounds has to walk rounds in order (it stops at the
+    first undrawn one), but on a cold cache that walk made ~29 NRL fetches
+    strictly one after another -- the ~11s cold /api/rounds. Resolving them
+    concurrently first turns that into roughly one round-trip and leaves the
+    loop below hitting cache only, with its stop-at-first-undrawn semantics
+    untouched. Verdicts already cached or verified return immediately, so
+    this costs nothing on the warm path. Failures are swallowed per-round:
+    the sequential walk re-runs the same call and handles the error there.
+    """
+    sem = asyncio.Semaphore(_ROUND_VERDICT_WARM_CONCURRENCY)
+
+    async def resolve(i):
+        async with sem:
+            try:
+                await _is_round_drawn(i)
+            except Exception as e:
+                logger.warning(f"Round verdict warm failed for round {i}: {e}")
+
+    await asyncio.gather(*(resolve(i) for i in range(1, TOTAL_ROUNDS + 1)))
 
 
 @app.get("/api/rounds")
@@ -582,6 +632,8 @@ async def get_rounds(season: int = SEASON):
             str(r["round_number"]): {"name": r["round_title"] or f"Round {r['round_number']}"}
             for r in get_season_rounds(season)
         }
+
+    await _warm_round_verdicts()
 
     result = {}
     for i in range(1, TOTAL_ROUNDS + 1):
@@ -781,6 +833,13 @@ def _enrich_fixtures(fixtures, round_number):
 # --- Round response cache ---
 _round_cache = {}       # key: round_number -> (response_dict, timestamp)
 _round_cache_lock = threading.Lock()
+
+# Rounds confirmed genuinely drawn (not an undrawn echo) AND fully played
+# out: round_number -> round_title. Both halves of that verdict are
+# immutable, so unlike _round_cache these entries never expire -- see
+# _is_round_drawn for why that distinction matters to /api/rounds.
+_round_drawn_verified = {}
+_MISSING = object()  # sentinel: a verified round title may itself be None
 _round_refreshing = set()  # round numbers currently being refreshed in background
 _ROUND_CACHE_TTL_LIVE = 120      # 2 min for rounds with upcoming/live matches
 _ROUND_CACHE_TTL_COMPLETED = 1800  # 30 min for fully completed rounds

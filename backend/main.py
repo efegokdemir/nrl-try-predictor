@@ -59,6 +59,15 @@ logger = logging.getLogger(__name__)
 # render.yaml. _warm_cache() is read-only and is never gated by this.
 ENABLE_SYNC_LOOPS = os.environ.get("ENABLE_SYNC_LOOPS", "false").strip().lower() in ("true", "1", "yes")
 
+# The model version actually being served, and so the one the accuracy pages
+# report on by default. The predictions table still holds model_version 1 and 2
+# rows as history (see docs/adr/0001-single-model-version.md), and aggregating
+# across all three triple-counted every round V1/V2 also ran in -- round 1 read
+# 11/24 instead of 3/8. Named rather than inlined because ADR-0006 puts a
+# challenger (4) alongside the champion in 2027, at which point the served
+# version is a thing that changes.
+CHAMPION_MODEL_VERSION = 3
+
 
 def _backfill_player_headshots(*player_lists):
     """Given one or more lists of player dicts (from parse_team_list), push
@@ -1395,8 +1404,11 @@ def _theme_to_colour(theme: dict) -> str:
 
 
 @app.get("/api/accuracy")
-async def get_accuracy(model_version: int = None, season: int = None):
-    """Get prediction accuracy stats."""
+async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int = None):
+    """Get prediction accuracy stats for the served model by default. An
+    explicit ?model_version= still reaches the retired V1/V2 history, and the
+    by_model breakdown in the response always spans every version regardless
+    of this filter, so nothing is hidden by defaulting it."""
     return get_accuracy_stats(model_version=model_version, season=season)
 
 
@@ -1405,7 +1417,7 @@ async def get_dashboard():
     """Overview data for the home dashboard: accuracy stats plus the
     betting-edge profit/loss simulation."""
     return {
-        "accuracy": get_accuracy_stats(model_version=None, season=None),
+        "accuracy": get_accuracy_stats(model_version=CHAMPION_MODEL_VERSION, season=None),
         "betting": get_betting_summary(),
     }
 

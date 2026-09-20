@@ -84,14 +84,12 @@ export default function AccuracyDashboard({ apiBase }) {
                 {data.by_round.map(r => {
                   const winPct = r.total > 0 ? (r.win_correct / r.total) * 100 : 0
                   return (
-                    <div key={r.round_number} className="round-bar-group">
-                      <div className="round-bar-col">
-                        <div className="round-bar-track">
-                          <div className="round-bar-fill" style={{ height: `${winPct}%` }} />
-                        </div>
-                        <span className="round-bar-pct">{winPct.toFixed(0)}%</span>
-                      </div>
+                    <div key={r.round_number} className="round-bar-row">
                       <span className="round-bar-label">R{r.round_number}</span>
+                      <div className="round-bar-track">
+                        <div className="round-bar-fill" style={{ width: `${winPct}%` }} />
+                      </div>
+                      <span className="round-bar-pct">{winPct.toFixed(0)}%</span>
                       <span className="round-bar-count">{r.win_correct}/{r.total}</span>
                     </div>
                   )

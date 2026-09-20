@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import LoadingSpinner from './LoadingSpinner'
-import MatchCard from './MatchCard'
+import MatchCard, { matchPath } from './MatchCard'
 import { fetchJson, getCurrentSeasonYear } from '../api'
 
 // 27 regular-season rounds + 4 finals weeks — must match backend/nrl_client.py's TOTAL_ROUNDS
@@ -57,8 +57,8 @@ export default function Draw({ apiBase }) {
   if (!roundData) return <div className="error">Round not found</div>
 
   const handleMatchClick = (match) => {
-    if (!match.match_url) return
-    navigate(`/match?url=${encodeURIComponent(match.match_url)}`)
+    const path = matchPath(match)
+    if (path) navigate(path)
   }
 
   const currentRound = parseInt(roundNumber)

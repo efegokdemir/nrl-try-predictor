@@ -23,6 +23,18 @@ function PLCell({ entry }) {
   )
 }
 
+/**
+ * Spoken label for a round row. The row is a link with an aria-label, which
+ * replaces its contents for assistive tech -- so the P/L has to be said here
+ * too, or it is simply absent for anyone using a screen reader.
+ */
+function rowLabel(r, winPct, entry) {
+  const base = `Round ${r.round_number}: ${winPct.toFixed(0)}% of win predictions correct, ${r.win_correct} of ${r.total}`
+  if (!entry || !entry.settled) return `${base}. No settled betting picks.`
+  const pl = entry.profit_per_unit_stake
+  return `${base}. Profit and loss ${pl >= 0 ? 'plus' : 'minus'} ${Math.abs(pl).toFixed(2)} per dollar staked.`
+}
+
 export default function AccuracyDashboard({ apiBase }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -123,7 +135,7 @@ export default function AccuracyDashboard({ apiBase }) {
                       key={r.round_number}
                       to={`/round/${r.round_number}?season=${data.season}`}
                       className="round-bar-row"
-                      aria-label={`Round ${r.round_number}: ${winPct.toFixed(0)}% of win predictions correct, ${r.win_correct} of ${r.total}`}
+                      aria-label={rowLabel(r, winPct, plByRound[r.round_number])}
                     >
                       <span className="round-bar-label">R{r.round_number}</span>
                       <div className="round-bar-track">

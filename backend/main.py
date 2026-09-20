@@ -154,6 +154,17 @@ def _cache_key_str(round_number: int) -> str:
     return f"round:{round_number}"
 
 
+def _match_cache_key_str(match_url: str) -> str:
+    """cache_store key for a persisted match detail.
+
+    Carries the model version because the stored payload is model output, not
+    raw data. Changing the model must not keep serving predictions the current
+    model never made -- a version bump simply stops matching, so the old rows
+    are ignored and recomputed rather than silently trusted.
+    """
+    return f"match:v{CHAMPION_MODEL_VERSION}:{match_url}"
+
+
 # Finals weeks don't carry a "round-N" segment in their NRL match_url — they're
 # "finals-week-N" instead (e.g. "/draw/nrl-premiership/2026/finals-week-1/...").
 # Map that onto the same 1..TOTAL_ROUNDS numbering /api/rounds/{n} uses, so
@@ -186,21 +197,37 @@ def _restore_cache_from_db():
         logger.info("No persisted cache entries found.")
         return
 
-    loaded = 0
+    match_prefix = f"match:v{CHAMPION_MODEL_VERSION}:"
+    rounds = 0
+    matches = 0
     for entry in entries:
         key = entry["key"]
-        if not key.startswith("round:"):
-            continue
         try:
-            _, rnd_str = key.split(":")
-            rnd = int(rnd_str)
             payload = json.loads(entry["payload"])
         except Exception:
             continue
-        with _round_cache_lock:
-            _round_cache[rnd] = (payload, entry["refreshed_at"])
-        loaded += 1
-    logger.info(f"Restored {loaded} cache entries from DB.")
+        if key.startswith("round:"):
+            try:
+                rnd = int(key.split(":", 1)[1])
+            except Exception:
+                continue
+            with _round_cache_lock:
+                _round_cache[rnd] = (payload, entry["refreshed_at"])
+            rounds += 1
+        elif key.startswith(match_prefix):
+            # Only persisted completed matches land here, so the restored
+            # entry is flagged completed -- which is what gives it the long
+            # TTL rather than the 2-minute live one.
+            url = key[len(match_prefix):]
+            if not url:
+                continue
+            with _match_cache_lock:
+                _match_cache[url] = (payload, entry["refreshed_at"], True)
+            matches += 1
+        # A match key carrying a different model version is left alone: it is
+        # another version's output, and will be overwritten under its own key
+        # when that match is next computed.
+    logger.info(f"Restored {rounds} round and {matches} match cache entries from DB.")
 
 
 async def _warm_cache():
@@ -1355,8 +1382,26 @@ async def _refresh_match_cache(url: str):
             _compute_match_detail, url, raw, home_players, away_players,
             bookmaker_data, is_completed, match_state
         )
+        refreshed_at = time.time()
         with _match_cache_lock:
-            _match_cache[url] = (result, time.time(), is_completed)
+            _match_cache[url] = (result, refreshed_at, is_completed)
+
+        # A finished match's detail is frozen: the model runs under
+        # before_season/before_round filters, so it only ever sees data up to
+        # that round. Same inputs, same code, same answer -- so persist it and
+        # stop paying the ~5s recompute once per process. Live and upcoming
+        # matches are deliberately not persisted: their team lists, odds and
+        # score are still moving, and the 2-minute TTL exists to catch that.
+        if is_completed:
+            try:
+                await asyncio.to_thread(
+                    save_cache_entry,
+                    _match_cache_key_str(url),
+                    json.dumps(result, default=str),
+                    refreshed_at,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist match cache for {url}: {e}")
         return result
     finally:
         _match_refreshing.discard(url)

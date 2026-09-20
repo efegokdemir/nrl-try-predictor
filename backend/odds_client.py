@@ -181,6 +181,23 @@ def _normalise(name: str) -> str:
     return " ".join(name.lower().strip().split())
 
 
+def _first_names_compatible(a: str, b: str) -> bool:
+    """Whether two given names could plausibly belong to the same person.
+
+    Bookmakers are inconsistent about the first name -- "J. Smith",
+    "Josh Smith", "Joshua Smith" all show up -- so requiring an exact match
+    loses real odds. Matching on the first letter alone is the opposite
+    problem: it makes every J-something with the same surname look like the
+    same player.
+    """
+    a, b = a.rstrip("."), b.rstrip(".")
+    if a == b:
+        return True
+    if len(a) == 1 or len(b) == 1:
+        return a[:1] == b[:1]          # an initial against a full name
+    return a.startswith(b) or b.startswith(a)   # "matt" / "matthew"
+
+
 def lookup_bookmaker_odds(
     bookmaker_data: dict,
     home_team: str,
@@ -190,6 +207,16 @@ def lookup_bookmaker_odds(
     """
     Look up a player's bookmaker odds from fetched data.
     Returns list of {"bookmaker": str, "decimal": float} or None.
+
+    An exact name match wins outright. Failing that, a surname plus a
+    compatible given name is accepted, but only when it picks out exactly
+    one player: `players` covers both teams in the match, and the NRL has
+    no shortage of shared surnames, so a loose rule can hand a player their
+    namesake's -- or an opponent's -- price. Nothing downstream would catch
+    it. The wrong price goes onto the match page and into
+    compute_best_edge_picks, which feeds the dashboard's profit/loss
+    simulation, where it would read as a real result. When the name is
+    ambiguous, no odds is the correct answer.
     """
     if not bookmaker_data:
         return None
@@ -197,17 +224,29 @@ def lookup_bookmaker_odds(
     norm_player = _normalise(player_name)
     norm_home = _normalise(home_team)
     norm_away = _normalise(away_team)
+    parts = norm_player.split()
 
     for bk_key, players in bookmaker_data.items():
         # Match if both team nicknames appear in the bookmaker key
-        if norm_home in bk_key and norm_away in bk_key:
-            if norm_player in players:
-                return players[norm_player]
-            # Fuzzy: initial + last name match
-            parts = norm_player.split()
-            if len(parts) >= 2:
-                for pname, pdata in players.items():
-                    pp = pname.split()
-                    if len(pp) >= 2 and pp[-1] == parts[-1] and pp[0][0] == parts[0][0]:
-                        return pdata
+        if norm_home not in bk_key or norm_away not in bk_key:
+            continue
+        if norm_player in players:
+            return players[norm_player]
+        if len(parts) < 2:
+            continue
+
+        candidates = []
+        for pname, pdata in players.items():
+            pp = pname.split()
+            if len(pp) >= 2 and pp[-1] == parts[-1] and _first_names_compatible(pp[0], parts[0]):
+                candidates.append((pname, pdata))
+
+        if len(candidates) == 1:
+            return candidates[0][1]
+        if len(candidates) > 1:
+            logger.warning(
+                f"Ambiguous bookmaker odds for {player_name!r} in {bk_key!r}: "
+                f"{[n for n, _ in candidates]} all match. Skipping rather than "
+                f"risk attaching another player's price."
+            )
     return None

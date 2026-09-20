@@ -396,14 +396,12 @@ async def _record_prediction_for_match(match_url: str, model_version: int = CHAM
         home_nickname, away_nickname,
     )
 
-    top3_home = [
-        {"name": p["name"], "number": p["number"], "position": p["position"], "try_percentage": p["try_percentage"]}
-        for p in predictions["home"][:3]
-    ]
-    top3_away = [
-        {"name": p["name"], "number": p["number"], "position": p["position"], "try_percentage": p["try_percentage"]}
-        for p in predictions["away"][:3]
-    ]
+    # Top-3 picks per side. Only the names are needed: the match page section
+    # that displayed these was replaced by "Last Time These Teams Met" (commit
+    # 112f401), leaving /api/accuracy -- which reads top3_hits and the
+    # top3_*_json columns built below -- as the only consumer.
+    top3_home = [{"name": p["name"]} for p in predictions["home"][:3]]
+    top3_away = [{"name": p["name"]} for p in predictions["away"][:3]]
 
     scoring = parse_scoring(raw)
     if not scoring:
@@ -789,110 +787,6 @@ def _predict_single_fixture(f, round_number):
     return f
 
 
-# Qualitative base-rate labels for each NRL position, keyed off the
-# FALLBACK_POSITION_RATES used by model.py. Used to explain picks.
-_POSITION_BASE_LABEL = {
-    "Fullback": "Fullbacks score tries on ~28% of games (high-scoring position)",
-    "Winger": "Wingers are the #1 try-scoring position (~35% base rate)",
-    "Centre": "Centres score on ~22% of games (strong edge position)",
-    "Five-Eighth": "Five-eighths score on ~15% of games",
-    "Halfback": "Halfbacks score on ~12% of games",
-    "Prop": "Props rarely score tries (~6% base rate)",
-    "Hooker": "Hookers score on ~10% of games",
-    "2nd Row": "2nd rowers score on ~10% of games",
-    "Second Row": "2nd rowers score on ~10% of games",
-    "Lock": "Locks score on ~8% of games",
-    "Interchange": "Bench players get limited try-scoring minutes",
-}
-
-
-def _normalise_position(pos: str) -> str:
-    if not pos:
-        return ""
-    low = pos.lower()
-    for key in _POSITION_BASE_LABEL:
-        if key.lower() in low:
-            return key
-    return ""
-
-
-def _build_pick_factors(pred, team_summary, opp_summary, is_home):
-    """Build a list of contributing factors for a top-3 pick so the UI can
-    show *why* this player was selected. Uses data already on hand from
-    predictions + team summaries, so no extra DB calls are needed."""
-    factors = []
-
-    position = pred.get("position", "")
-    pos_key = _normalise_position(position)
-    if pos_key:
-        factors.append({
-            "label": f"Position: {position}",
-            "detail": _POSITION_BASE_LABEL[pos_key],
-            "impact": "positive" if pos_key in ("Winger", "Fullback", "Centre") else "neutral",
-        })
-
-    # Team attack — pull the strongest attacking point from the team summary
-    if team_summary:
-        atk_points = team_summary.get("attack") or []
-        strong_atk = next((pt for pt in atk_points if pt.get("type") == "strong"), None)
-        weak_atk = next((pt for pt in atk_points if pt.get("type") == "weak"), None)
-        atk_rating = team_summary.get("attack_rating", "")
-        if strong_atk:
-            factors.append({
-                "label": f"Team attack: {atk_rating}",
-                "detail": strong_atk.get("text", ""),
-                "impact": "positive",
-            })
-        elif weak_atk:
-            factors.append({
-                "label": f"Team attack: {atk_rating}",
-                "detail": weak_atk.get("text", ""),
-                "impact": "negative",
-            })
-
-    # Opponent defence — pull the weakest defensive point (best for attacker)
-    if opp_summary:
-        def_points = opp_summary.get("defence") or []
-        weak_def = next((pt for pt in def_points if pt.get("type") == "weak"), None)
-        strong_def = next((pt for pt in def_points if pt.get("type") == "strong"), None)
-        def_rating = opp_summary.get("defence_rating", "")
-        if weak_def:
-            factors.append({
-                "label": f"Opponent defence: {def_rating}",
-                "detail": weak_def.get("text", ""),
-                "impact": "positive",
-            })
-        elif strong_def:
-            factors.append({
-                "label": f"Opponent defence: {def_rating}",
-                "detail": strong_def.get("text", ""),
-                "impact": "negative",
-            })
-
-    # Edge-side vulnerability: pull the opponent defence edge point that
-    # matches this player's field side, if we know it
-    field_side = (pred.get("field_side") or "").lower()
-    if field_side and opp_summary:
-        for pt in opp_summary.get("defence") or []:
-            text = (pt.get("text") or "").lower()
-            if field_side in text and "edge" in text:
-                factors.append({
-                    "label": f"Edge match-up ({field_side})",
-                    "detail": pt.get("text", ""),
-                    "impact": "positive" if pt.get("type") == "weak" else "negative",
-                })
-                break
-
-    if is_home:
-        factors.append({
-            "label": "Home advantage",
-            "detail": "+6% try-rate boost at home (+8% win probability)",
-            "impact": "positive",
-        })
-
-    return factors
-
-
 def _enrich_fixtures(fixtures, round_number):
     """Add win predictions to all fixtures. Pre-fetches all team data in ONE query."""
     # Collect all teams and matchups (with venues for prefetch)
@@ -1251,22 +1145,14 @@ def _compute_match_detail(url, raw, home_players, away_players,
     h2h_recent_tries = get_h2h_recent_tries(home_nickname, away_nickname,
                                              before_season=before_season, before_round=before_round)
 
-    top3_home = [
-        {
-            "name": p["name"], "number": p["number"],
-            "position": p["position"], "try_percentage": p["try_percentage"],
-            "factors": _build_pick_factors(p, home_summary, away_summary, is_home=True),
-        }
-        for p in predictions["home"][:3]
-    ]
-    top3_away = [
-        {
-            "name": p["name"], "number": p["number"],
-            "position": p["position"], "try_percentage": p["try_percentage"],
-            "factors": _build_pick_factors(p, away_summary, home_summary, is_home=False),
-        }
-        for p in predictions["away"][:3]
-    ]
+    # Top-3 picks per side. Only the names are needed: the match page section
+    # that displayed these -- with an expandable "Why this pick" panel built
+    # by a since-removed _build_pick_factors -- was replaced by "Last Time
+    # These Teams Met" (commit 112f401), leaving the prediction row written
+    # below as the only consumer. Kept in sync with the same block in
+    # _record_prediction_for_match, per AGENTS.md.
+    top3_home = [{"name": p["name"]} for p in predictions["home"][:3]]
+    top3_away = [{"name": p["name"]} for p in predictions["away"][:3]]
 
     scoring = parse_scoring(raw) if is_completed else None
 
@@ -1351,8 +1237,6 @@ def _compute_match_detail(url, raw, home_players, away_players,
         "home_stats": stats.get("home", {}),
         "away_stats": stats.get("away", {}),
         "predictions": predictions,
-        "top3_home": top3_home,
-        "top3_away": top3_away,
         "scoring": scoring,
         "win_prediction": win_prediction,
         "multi": multi,

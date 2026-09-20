@@ -2885,7 +2885,7 @@ body {
    stay flush with the card edge. */
 .round-bar-row {
   display: grid;
-  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem;
+  grid-template-columns: 2.4rem 1fr 2.4rem 3.2rem 3.6rem;
   align-items: center;
   gap: 0.5rem;
   padding: 0.15rem 0.35rem;
@@ -2941,6 +2941,33 @@ body {
   font-size: 0.68rem;
   color: #aaa;
   text-align: right;
+}
+
+.round-bar-pl {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.round-bar-pl-up {
+  color: #16a34a;
+}
+
+.round-bar-pl-down {
+  color: #dc2626;
+}
+
+.round-bar-pl-none {
+  color: #ccc;
+  font-weight: 400;
+}
+
+.section-note {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin: -0.35rem 0 0.6rem;
 }
 
 /* ── Odds (inline in Draw match cards) ── */

@@ -1421,9 +1421,19 @@ async def get_accuracy(model_version: int = CHAMPION_MODEL_VERSION, season: int 
     the history, and the by_model breakdown spans every version regardless of
     the model filter, so nothing is hidden by defaulting these."""
     stats = get_accuracy_stats(model_version=model_version, season=season)
+    # Per-round betting P/L rides along so the by-round chart can show a P/L
+    # column without a second request. It is model-agnostic -- edge_picks has
+    # no model_version -- so unlike the accuracy figures it does not narrow
+    # when ?model_version= is set.
+    betting_by_round = get_betting_summary(season=season)["by_round"]
     # New dict: stats is a cached object shared with every other caller, so
     # it must not be mutated here.
-    return {**stats, "season": season, "seasons": _selectable_seasons()}
+    return {
+        **stats,
+        "season": season,
+        "seasons": _selectable_seasons(),
+        "betting_by_round": betting_by_round,
+    }
 
 
 @app.get("/api/dashboard")

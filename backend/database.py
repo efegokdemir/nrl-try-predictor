@@ -1767,6 +1767,7 @@ def get_betting_summary(season: int = None) -> dict:
     wins = 0
     losses = 0
     total_profit = 0.0
+    by_round = {}
 
     for pick in picks:
         match = conn.execute(
@@ -1791,6 +1792,21 @@ def get_betting_summary(season: int = None) -> dict:
                 losses += 1
             total_profit += profit
 
+        # Per-round rollup for the accuracy page's P/L column. Accumulated in
+        # this same pass because status and profit are already resolved here;
+        # recomputing them per round would mean re-running the tries lookup.
+        rnd = by_round.setdefault(
+            pick["round_number"],
+            {"round_number": pick["round_number"], "picks": 0, "settled": 0,
+             "wins": 0, "losses": 0, "profit_per_unit_stake": 0.0},
+        )
+        rnd["picks"] += 1
+        if status != "pending":
+            rnd["settled"] += 1
+            rnd["wins"] += 1 if status == "won" else 0
+            rnd["losses"] += 1 if status == "lost" else 0
+            rnd["profit_per_unit_stake"] += profit
+
         results.append({**dict(pick), "status": status, "profit_per_unit_stake": round(profit, 3)})
 
     conn.close()
@@ -1807,6 +1823,10 @@ def get_betting_summary(season: int = None) -> dict:
         "total_profit_per_unit_stake": round(total_profit, 3),
         "roi_per_unit_stake": round(total_profit / settled, 3) if settled else 0,
         "tracking_since": results[0]["captured_at"] if results else None,
+        "by_round": [
+            {**r, "profit_per_unit_stake": round(r["profit_per_unit_stake"], 3)}
+            for r in sorted(by_round.values(), key=lambda r: r["round_number"])
+        ],
     }
 
 

@@ -518,6 +518,26 @@ def mark_round_scraped(season: int, round_number: int):
         conn.close()
 
 
+def match_exists(match_url: str) -> bool:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT 1 FROM matches WHERE match_url=%s", (match_url,)).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def update_match_conditions(match_id: int, weather: str, ground_conditions: str) -> None:
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE matches SET weather=%s, ground_conditions=%s WHERE id=%s",
+            (weather, ground_conditions, match_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 def insert_match(season, round_number, round_title, match_url, match_state,
                  home_team, away_team, home_score, away_score, venue, kickoff,
                  venue_city="") -> int:

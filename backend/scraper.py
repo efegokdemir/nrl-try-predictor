@@ -12,7 +12,7 @@ import logging
 from field_side import JERSEY_FIELD_SIDE
 from database import (
     init_db, get_db, is_round_scraped, mark_round_scraped,
-    insert_match, bulk_insert_match_data, get_total_match_count,
+    insert_match, bulk_insert_match_data, get_total_match_count, match_exists, update_match_conditions,
     repair_scrape_progress,
 )
 
@@ -316,13 +316,7 @@ async def scrape_match_detail(client: httpx.AsyncClient, match_id: int,
     weather = data.get("weather", "")
     ground_conditions = data.get("groundConditions", "")
     if weather or ground_conditions:
-        _conn = get_db()
-        _conn.execute(
-            "UPDATE matches SET weather=%s, ground_conditions=%s WHERE id=%s",
-            (weather or "", ground_conditions or "", match_id)
-        )
-        _conn.commit()
-        _conn.close()
+        update_match_conditions(match_id, weather or "", ground_conditions or "")
 
     if players_data or tries_data:
         bulk_insert_match_data(match_id, players_data, tries_data, interchanges_data)
@@ -330,14 +324,6 @@ async def scrape_match_detail(client: httpx.AsyncClient, match_id: int,
 
 CURRENT_SEASON = 2026
 CURRENT_SEASON_ROUNDS = 31  # 27 regular-season rounds + 4 finals weeks
-
-
-def _match_exists(match_url: str) -> bool:
-    """Check if a match is already stored in the database."""
-    conn = get_db()
-    row = conn.execute("SELECT 1 FROM matches WHERE match_url=%s", (match_url,)).fetchone()
-    conn.close()
-    return row is not None
 
 
 async def _scrape_single_match(client, season, round_number, match):
@@ -437,7 +423,7 @@ async def sync_current_season():
                 # Only scrape matches whose match_url is NOT already in the DB
                 for match in completed:
                     match_url = match.get("matchCentreUrl", "")
-                    if not match_url or _match_exists(match_url):
+                    if not match_url or match_exists(match_url):
                         continue
                     # New completed match — scrape it
                     await _scrape_single_match(client, CURRENT_SEASON, rnd, match)

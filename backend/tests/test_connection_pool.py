@@ -19,6 +19,7 @@ import inspect
 import pytest
 
 import database
+import scraper
 
 
 # One representative call per shape of query function: plain reads, cached
@@ -119,15 +120,17 @@ def test_every_get_db_call_site_is_guarded():
     code is the risk here -- this reads the source and fails on any
     `conn = get_db()` that isn't immediately followed by `try:`.
     """
-    lines = inspect.getsource(database).split("\n")
-    unguarded = [
-        i + 1
-        for i, line in enumerate(lines)
-        if line == "    conn = get_db()"
-        and next((l for l in lines[i + 1:] if l.strip()), "") != "    try:"
-    ]
+    unguarded = []
+    for module in [database, scraper]:
+        lines = inspect.getsource(module).split("\n")
+        for i, line in enumerate(lines):
+            # check any indentation
+            if "conn = get_db()" in line.strip() or "_conn = get_db()" in line.strip():
+                next_line = next((l for l in lines[i + 1:] if l.strip()), "")
+                if not next_line.strip().startswith("try:"):
+                    unguarded.append(f"{module.__name__}:{i + 1}")
     assert not unguarded, (
-        f"get_db() without a following try: at line(s) {unguarded}. "
+        f"get_db() without a following try: at {unguarded}. "
         "A query that raises there leaks its connection out of the pool."
     )
 
@@ -141,14 +144,14 @@ def test_close_is_only_ever_called_from_a_finally():
     in its finally, so it raised for any team with no prior completed match
     -- a team's first-ever game, or the earliest season in the data.
     """
-    lines = inspect.getsource(database).split("\n")
-    stray = [
-        i + 1
-        for i, line in enumerate(lines)
-        if line.strip() == "conn.close()"
-        and lines[i - 1].strip() != "finally:"
-    ]
+    stray = []
+    for module in [database, scraper]:
+        lines = inspect.getsource(module).split("\n")
+        for i, line in enumerate(lines):
+            if line.strip() in ["conn.close()", "_conn.close()"]:
+                if lines[i - 1].strip() != "finally:":
+                    stray.append(f"{module.__name__}:{i + 1}")
     assert not stray, (
-        f"conn.close() outside a finally: at line(s) {stray}. "
+        f"conn.close() outside a finally: at {stray}. "
         "The finally will close it again, and the second putconn raises."
     )

@@ -48,8 +48,21 @@ npm run dev        # Vite dev server; proxies /api -> $VITE_PROXY_TARGET (defaul
 docker compose up --build
 ```
 
-Backend on `:8000`, frontend (nginx) on `:3000`. `ODDS_API_KEY` and `DATABASE_URL` are both
-optional — the app degrades gracefully without them (no bookmaker odds / no historical DB).
+The backend is available on `:8000` and the frontend on `:3000`. Docker Compose starts a
+local PostgreSQL service (`db`) and sets `DATABASE_URL` for the backend automatically.
+`ODDS_API_KEY` is optional; bookmaker odds are unavailable when it is unset.
+
+### Local database safety
+
+`docker compose up --build` also loads `docker-compose.override.yml`, which starts the
+development servers and defaults `ENABLE_SYNC_LOOPS=false`. This disables the periodic
+scrape and prediction sync loops, **not all database writes**: startup initialization and
+application requests can still modify data. Keep local development pointed at the
+Compose-managed `db` service rather than a production database.
+
+Compose sets `DB_SSLMODE=disable` for its local PostgreSQL container. When running the
+backend directly against a remote PostgreSQL database, configure `DATABASE_URL` and use
+a suitable TLS setting (typically `DB_SSLMODE=require`).
 
 ## Project structure
 
